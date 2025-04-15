@@ -389,6 +389,64 @@ def days_to_months_days(days):
 
     return " and ".join(parts) if parts else "0 days"
 
+def height_chart():
+    # Load baby's height data from CSV
+    df = filter_csv_by_category('Growth')
+    
+    df['Date'] = pd.to_datetime(df['Start'], errors='coerce')
+    df['Height'] = df['Start Location'].str.replace('cm', '', regex=False).astype(float)
+
+    df = df.dropna(subset=['Date', 'Height'])
+
+    # Calculate age in months (or days)
+    birth_date = df['Date'].min()  # You might want to store baby's DOB somewhere
+    df['Months'] = ((df['Date'] - birth_date).dt.days / 30.44).round(1)
+
+    # Load percentile reference data (example assumes it's a DataFrame)
+    # WHO data typically has Age (in months) and percentile columns
+    percentiles_df = pd.read_csv('data/girls-length-percentiles.csv')  # Columns: AgeMonths, P3, P15, P50, P85, P97
+
+    # Plot using Plotly
+    fig = go.Figure()
+
+    # Add baby's height line
+    fig.add_trace(go.Scatter(
+        x=df['Months'], y=df['Height'],
+        mode='lines+markers',
+        name="Baby's Height", line=dict(color='black', width=3),
+        hovertemplate=
+            'Date: %{customdata[0]}<br>' +
+            'Height: %{y:.1f} cm<br>',
+        customdata=df[['Date']].values
+    ))
+
+    # Add percentile curves
+    for p in ['P3', 'P15', 'P50', 'P85', 'P97']:
+        fig.add_trace(go.Scatter(
+            x=percentiles_df['Months'],
+            y=percentiles_df[p],
+            mode='lines',
+            name=f'{p} Percentile',
+            line=dict(dash='dot')
+        ))
+
+    # Layout
+    fig.update_layout(
+        title="Baby's Height vs Age (with Percentiles)",
+        xaxis_title="Age (months)",
+        yaxis_title="Height (cm)",
+        legend_title="Legend",
+        height=500
+    )
+
+    st.plotly_chart(fig)
+
+def weight_chart():
+    pass
+
+def head_chart():
+    pass
+
 def calendar_filter(): 
     # Options for quick date selections
     options = ['Last 7 days', 'Last 30 days', 'Last 90 days', 'All Time', 'Custom range']
@@ -452,10 +510,18 @@ if menu_id == 'Overview':
 
 elif menu_id == 'Growth':
     st.header("📈 Growth Tracking")
-    st.write("Show height, weight, head circumference charts here.")  
-    calendar_filter()
+    st.write("Show height, weight, head circumference charts here.")
 
     tab1, tab2, tab3 = st.tabs(["Height", "Weight", "Head Circumference"])
+
+    with tab1:
+        height_chart()
+
+    with tab2:
+        weight_chart()
+
+    with tab3:
+        head_chart()
 
 elif menu_id == 'Sleep':
     st.header("💤 Sleep Patterns")
