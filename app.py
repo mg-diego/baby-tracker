@@ -321,8 +321,6 @@ def breastfeeding_chart(start_date, end_date):
 
     st.plotly_chart(interval_chart)
 
-
-
 def breastfeeding_duration_chart(start_date, end_date):
     # Step 1: Load and filter the data
     feed_df = filter_csv_by_category('Feed')
@@ -373,7 +371,6 @@ def breastfeeding_duration_chart(start_date, end_date):
 
     # Step 8: Display in Streamlit
     st.plotly_chart(fig)
-
 
 def days_to_months_days(days):
     months = days // 30
@@ -444,7 +441,8 @@ with st.sidebar:
     )
 
 ona_days_old = (datetime.date.today() - datetime.date(2025, 1, 15)).days
-st.subheader(f"Ona is {days_to_months_days(ona_days_old)} old.")
+st.markdown(f'<h3 style="color: gray;">Ona is {days_to_months_days(ona_days_old)} old.</h3>', unsafe_allow_html=True)
+st.markdown(f'<small style="color: gray;">(Last Update: {df["Start"].max()})</small>', unsafe_allow_html=True)
 
 filter_csv_by_category('Sleep')
 
