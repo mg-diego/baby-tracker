@@ -64,9 +64,7 @@ All visualizations support **start date** and **end date** filtering to analyze 
 ---
 
 ## 🚀 Deployment
-You can deploy this Streamlit app via:
-- **Streamlit Community Cloud** (recommended)
-- Self-hosted environments (e.g. Heroku, Docker)
+https://baby-tracker-dashboard.streamlit.app/
 
 ---
 
