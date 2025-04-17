@@ -5,9 +5,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import numpy as np
+from datetime import time
 
 import streamlit_antd_components as sac
 
+# https://matplotlib.org/stable/gallery/color/named_colors.html
 # Dummy data
 sleep_data = pd.DataFrame({
     'Date': pd.date_range(start='2024-04-01', periods=7, freq='D'),
@@ -16,12 +19,21 @@ sleep_data = pd.DataFrame({
     'Night Wakeups': [2, 1, 3, 1, 2, 1, 2],
 })
 
+    # Default values for custom input
+today = datetime.datetime.now()
+default_start = today - datetime.timedelta(days=7)
+default_end = today
+
 st.set_page_config(page_title="👶 Baby Tracker Dashboard", layout="wide")
 
 df = pd.read_csv("data/huckelberry.csv", sep=",")
 
 def filter_csv_by_category(category):
     return df[df['Type'] == category]
+
+def filter_csv_by_start_date(start_date):
+    df["Start"] = pd.to_datetime(df["Start"], errors='coerce')
+    return df[df["Start"].dt.date == pd.to_datetime(start_date).date()]
 
 def sleep_heatmap():
     # Step 1: Load and clean the sleep intervals
@@ -404,7 +416,7 @@ def height_chart():
 
     # Load percentile reference data (example assumes it's a DataFrame)
     # WHO data typically has Age (in months) and percentile columns
-    percentiles_df = pd.read_csv('data/girls-length-percentiles.csv')  # Columns: AgeMonths, P3, P15, P50, P85, P97
+    percentiles_df = pd.read_csv('data/height-girls-percentiles-who.csv')  # Columns: AgeMonths, P3, P15, P50, P85, P97
 
     # Plot using Plotly
     fig = go.Figure()
@@ -421,7 +433,7 @@ def height_chart():
     ))
 
     # Add percentile curves
-    for p in ['P3', 'P15', 'P50', 'P85', 'P97']:
+    for p in ['P1', 'P5', 'P10', 'P25', 'P50', 'P75', 'P90', 'P95', 'P99']:
         fig.add_trace(go.Scatter(
             x=percentiles_df['Months'],
             y=percentiles_df[p],
@@ -442,20 +454,107 @@ def height_chart():
     st.plotly_chart(fig)
 
 def weight_chart():
-    pass
+    # Load baby's height data from CSV
+    df = filter_csv_by_category('Growth')
+    
+    df['Date'] = pd.to_datetime(df['Start'], errors='coerce')
+    df['Weight'] = df['Start Condition'].str.replace('kg', '', regex=False).astype(float)
+
+    df = df.dropna(subset=['Date', 'Weight'])
+
+    # Calculate age in months (or days)
+    birth_date = df['Date'].min()  # You might want to store baby's DOB somewhere
+    df['Months'] = ((df['Date'] - birth_date).dt.days / 30.44).round(1)
+    percentiles_df = pd.read_csv('data/weight-girls-percentiles-who.csv')
+
+    # Plot using Plotly
+    fig = go.Figure()
+
+    # Add baby's height line
+    fig.add_trace(go.Scatter(
+        x=df['Months'], y=df['Weight'],
+        mode='lines+markers',
+        name="Baby's Weight", line=dict(color='black', width=3),
+        hovertemplate=
+            'Date: %{customdata[0]}<br>' +
+            'Weight: %{y:.1f} kg<br>',
+        customdata=df[['Date']].values
+    ))
+
+    # Add percentile curves
+    for p in ['P1', 'P5', 'P10', 'P25', 'P50', 'P75', 'P90', 'P95', 'P99']:
+        fig.add_trace(go.Scatter(
+            x=percentiles_df['Months'],
+            y=percentiles_df[p],
+            mode='lines',
+            name=f'{p} Percentile',
+            line=dict(dash='dot')
+        ))
+
+    # Layout
+    fig.update_layout(
+        title="Baby's Weight vs Age (with Percentiles)",
+        xaxis_title="Age (months)",
+        yaxis_title="Weight (kg)",
+        legend_title="Legend",
+        height=500
+    )
+
+    st.plotly_chart(fig)
 
 def head_chart():
-    pass
+    # Load baby's height data from CSV
+    df = filter_csv_by_category('Growth')
+    
+    df['Date'] = pd.to_datetime(df['Start'], errors='coerce')
+    df['Head'] = df['End Condition'].str.replace('cm', '', regex=False).astype(float)
+
+    df = df.dropna(subset=['Date', 'Head'])
+
+    # Calculate age in months (or days)
+    birth_date = df['Date'].min()  # You might want to store baby's DOB somewhere
+    df['Months'] = ((df['Date'] - birth_date).dt.days / 30.44).round(1)
+    percentiles_df = pd.read_csv('data/head-girls-percentiles-who.csv')
+
+    # Plot using Plotly
+    fig = go.Figure()
+
+    # Add baby's height line
+    fig.add_trace(go.Scatter(
+        x=df['Months'], y=df['Head'],
+        mode='lines+markers',
+        name="Baby's Head Circumference", line=dict(color='black', width=3),
+        hovertemplate=
+            'Date: %{customdata[0]}<br>' +
+            'Head Circumference: %{y:.1f} cm<br>',
+        customdata=df[['Date']].values
+    ))
+
+    # Add percentile curves
+    for p in ['P1', 'P5', 'P10', 'P25', 'P50', 'P75', 'P90', 'P95', 'P99']:
+        fig.add_trace(go.Scatter(
+            x=percentiles_df['Months'],
+            y=percentiles_df[p],
+            mode='lines',
+            name=f'{p} Percentile',
+            line=dict(dash='dot')
+        ))
+
+    # Layout
+    fig.update_layout(
+        title="Baby's Head Circumference vs Age (with Percentiles)",
+        xaxis_title="Age (months)",
+        yaxis_title="Head Circumference (cm)",
+        legend_title="Legend",
+        height=500
+    )
+
+    st.plotly_chart(fig)
 
 def calendar_filter(): 
     # Options for quick date selections
     options = ['Last 7 days', 'Last 30 days', 'Last 90 days', 'All Time', 'Custom range']
     selection = st.selectbox("Select date range", options)
-
-    # Default values for custom input
-    today = datetime.datetime.now()
-    default_start = today - datetime.timedelta(days=7)
-    default_end = today
 
     # Get date range
     if selection == 'Custom range':
@@ -482,6 +581,82 @@ def calendar_filter():
     
     return start_date, end_date
 
+def polar_chart(df):
+
+    # Inputs (you can also use st.time_input or st.file_uploader)
+    dormido = time(19, 30)
+    desperto = time(20, 15)
+    amanecer = time(6, 0)
+
+    # Convert to hour decimals
+    def to_decimal(t):
+        return t.hour + t.minute / 60
+
+    eventos = {
+        "Dormido": to_decimal(dormido),
+        "Despertó": to_decimal(desperto),
+        "Amanecer": to_decimal(amanecer) + (24 if to_decimal(amanecer) < 12 else 0)
+    }
+
+    colores = {
+        "Dormido": "green",
+        "Despertó": "red",
+        "Amanecer": "orange"
+    }
+
+    # Convert hour to polar angle (in degrees)
+    def hora_a_ángulo(hora_decimal):
+        return (90 - (hora_decimal % 24) * 15) % 360
+
+    # Base circular "reloj"
+    horas = np.linspace(19, 30, 200)
+    ángulos = [(90 - h * 15 % 360) for h in horas]
+    radios = [1] * len(horas)
+
+    fig = go.Figure()
+
+    # Reloj base
+    fig.add_trace(go.Scatterpolar(
+        r=radios,
+        theta=ángulos,
+        mode='lines',
+        line=dict(color='royalblue', width=20),
+        hoverinfo='skip',
+        showlegend=True,
+        name="Night Sleep"
+    ))
+
+    # Añadir eventos
+    for evento, hora in eventos.items():
+        ángulo = hora_a_ángulo(hora)
+        fig.add_trace(go.Scatterpolar(
+            r=[1],
+            theta=[ángulo],
+            mode='markers+text',
+            marker=dict(color=colores[evento], size=12),
+            text=[evento],
+            textposition='top center',
+            name=evento
+        ))
+
+    # Estética
+    fig.update_layout(
+        height=600,
+        polar=dict(
+            radialaxis=dict(visible=False),
+            angularaxis=dict(
+                direction='counterclockwise',
+                rotation=180,
+                tickmode='array',
+                tickvals=[hora_a_ángulo(h) for h in range(0, 24)],
+                ticktext=[f"{h%24}:00" for h in range(0, 24)],
+            )
+        ),
+        showlegend=True,
+        margin=dict(t=20, b=20, l=0, r=0)
+    )
+
+    st.plotly_chart(fig, use_container_width=False)
 
 st.title("👶 Baby Tracker Dashboard")
 
@@ -507,20 +682,30 @@ filter_csv_by_category('Sleep')
 if menu_id == 'Overview':
     st.header("📊 Overview")
     st.write("Show a summary of baby data here.")
+    custom_range = st.date_input(
+        "Select custom date range",
+        value=today,
+        max_value=today
+    )
+    df = filter_csv_by_start_date(custom_range)
+    polar_chart(df)
 
 elif menu_id == 'Growth':
     st.header("📈 Growth Tracking")
-    st.write("Show height, weight, head circumference charts here.")
+    st.write(" These standards were developed using data collected in the WHO Multicentre Growth Reference Study. The site presents documentation on how the physical growth curves and motor milestone windows of achievement were developed as well as application tools to support the implementation of the standards")
 
     tab1, tab2, tab3 = st.tabs(["Height", "Weight", "Head Circumference"])
 
     with tab1:
+        st.write('https://www.who.int/tools/child-growth-standards/standards/length-height-for-age')
         height_chart()
 
     with tab2:
+        st.write('https://www.who.int/tools/child-growth-standards/standards/weight-for-age')
         weight_chart()
 
     with tab3:
+        st.write('https://www.who.int/tools/child-growth-standards/standards/head-circumference-for-age')
         head_chart()
 
 elif menu_id == 'Sleep':
