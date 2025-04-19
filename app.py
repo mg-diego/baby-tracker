@@ -28,16 +28,16 @@ st.set_page_config(page_title="👶 Baby Tracker Dashboard", layout="wide")
 
 df = pd.read_csv("data/huckelberry.csv", sep=",")
 
-def filter_csv_by_category(category):
-    return df[df['Type'] == category]
+def filter_csv_by_category(data_frame, category):
+    return data_frame[data_frame['Type'] == category]
 
-def filter_csv_by_start_date(start_date):
-    df["Start"] = pd.to_datetime(df["Start"], errors='coerce')
-    return df[df["Start"].dt.date == pd.to_datetime(start_date).date()]
+def filter_csv_by_start_date(data_frame, start_date):
+    data_frame["Start"] = pd.to_datetime(data_frame["Start"], errors='coerce')
+    return data_frame[data_frame["Start"].dt.date == pd.to_datetime(start_date).date()]
 
 def sleep_heatmap():
     # Step 1: Load and clean the sleep intervals
-    sleep_df = filter_csv_by_category('Sleep')
+    sleep_df = filter_csv_by_category(df, 'Sleep')
     sleep_df['Start'] = pd.to_datetime(sleep_df['Start'], errors='coerce')
     sleep_df['End'] = pd.to_datetime(sleep_df['End'], errors='coerce')  # Assuming there's an 'End' column
     sleep_df = sleep_df.dropna(subset=['Start', 'End'])
@@ -108,7 +108,7 @@ def sleep_heatmap():
 
 def diaper_charts(start_date, end_date):
     # Step 1: Load the CSV data (assuming a function 'filter_csv_by_category' is available)
-    diaper_df = filter_csv_by_category('Diaper')  # Replace with your actual CSV parsing method
+    diaper_df = filter_csv_by_category(df, 'Diaper')  # Replace with your actual CSV parsing method
 
     # Step 2: Convert the 'Start' column to datetime (assuming 'Start' column has the date)
     diaper_df['Start'] = pd.to_datetime(diaper_df['Start'], errors='coerce')
@@ -216,7 +216,7 @@ def diaper_charts(start_date, end_date):
 
 def breastfeeding_chart(start_date, end_date):
     # Step 1: Load and filter CSV data
-    feed_df = filter_csv_by_category('Feed')
+    feed_df = filter_csv_by_category(df, 'Feed')
     feed_df['Start'] = pd.to_datetime(feed_df['Start'], errors='coerce')
 
     # Step 2: Filter by date range and start location
@@ -335,7 +335,7 @@ def breastfeeding_chart(start_date, end_date):
 
 def breastfeeding_duration_chart(start_date, end_date):
     # Step 1: Load and filter the data
-    feed_df = filter_csv_by_category('Feed')
+    feed_df = filter_csv_by_category(df, 'Feed')
     feed_df = feed_df[feed_df['Start Location'].str.lower() == 'breast']
     feed_df['Start'] = pd.to_datetime(feed_df['Start'], errors='coerce')
     feed_df['End'] = pd.to_datetime(feed_df['End'], errors='coerce')
@@ -403,7 +403,7 @@ def days_to_months_days(days):
 
 def height_chart():
     # Load baby's height data from CSV
-    df = filter_csv_by_category('Growth')
+    df = filter_csv_by_category(df, 'Growth')
     
     df['Date'] = pd.to_datetime(df['Start'], errors='coerce')
     df['Height'] = df['Start Location'].str.replace('cm', '', regex=False).astype(float)
@@ -455,7 +455,7 @@ def height_chart():
 
 def weight_chart():
     # Load baby's height data from CSV
-    df = filter_csv_by_category('Growth')
+    df = filter_csv_by_category(df, 'Growth')
     
     df['Date'] = pd.to_datetime(df['Start'], errors='coerce')
     df['Weight'] = df['Start Condition'].str.replace('kg', '', regex=False).astype(float)
@@ -504,7 +504,7 @@ def weight_chart():
 
 def head_chart():
     # Load baby's height data from CSV
-    df = filter_csv_by_category('Growth')
+    df = filter_csv_by_category(df, 'Growth')
     
     df['Date'] = pd.to_datetime(df['Start'], errors='coerce')
     df['Head'] = df['End Condition'].str.replace('cm', '', regex=False).astype(float)
@@ -581,39 +581,97 @@ def calendar_filter():
     
     return start_date, end_date
 
-def polar_chart(df):
-
+def polar_chart(data_frame):
     # Inputs (you can also use st.time_input or st.file_uploader)
     dormido = time(19, 30)
     desperto = time(20, 15)
-    amanecer = time(6, 0)
 
-    # Convert to hour decimals
+    single_events = ['Woke up', 'Bed time', 'Diaper']
+    segment_events = ['Sleep', 'Night waking']
+
     def to_decimal(t):
         return t.hour + t.minute / 60
-
-    eventos = {
-        "Dormido": to_decimal(dormido),
-        "Despertó": to_decimal(desperto),
-        "Amanecer": to_decimal(amanecer) + (24 if to_decimal(amanecer) < 12 else 0)
-    }
-
-    colores = {
-        "Dormido": "green",
-        "Despertó": "red",
-        "Amanecer": "orange"
-    }
 
     # Convert hour to polar angle (in degrees)
     def hora_a_ángulo(hora_decimal):
         return (90 - (hora_decimal % 24) * 15) % 360
 
-    # Base circular "reloj"
-    horas = np.linspace(19, 30, 200)
-    ángulos = [(90 - h * 15 % 360) for h in horas]
-    radios = [1] * len(horas)
+    eventos = {}       
+
+    colores = {
+        "Woke up": "gold",
+        "Bed time": "orange",
+        "Sleep": "royalblue",
+        "Night waking": "red"
+    }    
 
     fig = go.Figure()
+
+    for event in single_events:        
+        event_df = filter_csv_by_category(data_frame, event)
+
+        # Validate DataFrame
+        if event_df.empty or 'Start' not in event_df.columns:
+            st.warning(f"No '{event}' data available.")
+            continue
+
+        event_df['Start'] = pd.to_datetime(event_df['Start'], errors='coerce')
+        event_df = event_df.dropna(subset=['Start'])
+
+        # Add all valid times to the eventos dictionary
+        counter = 1
+        for _, row in event_df.iterrows():
+            key = event if len(event_df) <= 1 else f"{event} {counter}" 
+            if (event == "Diaper"):
+                colores[key] = "pink"
+            if (event == 'Feed' and row['Start Location'] == 'Bottle'):
+                colores[key] = "lime"
+           
+            eventos[key] = to_decimal(row['Start'].time())
+            counter += 1 
+
+    for event in segment_events:
+        event_df = filter_csv_by_category(data_frame, event)
+
+        if event_df.empty or 'Start' not in event_df.columns:
+            st.warning(f"No '{event}' data available.")
+            continue
+
+        event_df['Start'] = pd.to_datetime(event_df['Start'], errors='coerce')
+        event_df['End'] = pd.to_datetime(event_df['End'], errors='coerce')
+        event_df = event_df.dropna(subset=['Start', 'End'])
+
+        for _, row in event_df.iterrows():
+            start = row['Start'].time()
+            end = row['End'].time()
+
+            # Convert to hour decimals
+            start_h = to_decimal(start)
+            end_h = to_decimal(end)
+
+            # Handle times that pass midnight
+            if end_h < start_h:
+                end_h += 24
+
+            # Create points between start and end to draw the arc
+            hours_range = np.linspace(start_h, end_h, 50)
+            angles = [hora_a_ángulo(h % 24) for h in hours_range]
+            radii = [1] * len(angles)
+
+            fig.add_trace(go.Scatterpolar(
+                r=radii,
+                theta=angles,
+                mode='lines',
+                line=dict(color=colores[event], width=10),  # Thinner than base ring
+                name=event,
+                showlegend=True
+            ))
+
+    '''
+    # Base circular "reloj"
+    horas = np.linspace(hora_a_ángulo(to_decimal("19:00")), 30, 200)
+    ángulos = [(90 - h * 15 % 360) for h in horas]
+    radios = [1] * len(horas)
 
     # Reloj base
     fig.add_trace(go.Scatterpolar(
@@ -625,6 +683,7 @@ def polar_chart(df):
         showlegend=True,
         name="Night Sleep"
     ))
+    '''
 
     # Añadir eventos
     for evento, hora in eventos.items():
@@ -633,7 +692,7 @@ def polar_chart(df):
             r=[1],
             theta=[ángulo],
             mode='markers+text',
-            marker=dict(color=colores[evento], size=12),
+            marker=dict(color=colores[evento], size=30),
             text=[evento],
             textposition='top center',
             name=evento
@@ -677,7 +736,7 @@ ona_days_old = (datetime.date.today() - datetime.date(2025, 1, 15)).days
 st.markdown(f'<h3 style="color: gray;">Ona is {days_to_months_days(ona_days_old)} old.</h3>', unsafe_allow_html=True)
 st.markdown(f'<small style="color: gray;">(Last Update: {df["Start"].max()})</small>', unsafe_allow_html=True)
 
-filter_csv_by_category('Sleep')
+filter_csv_by_category(df, 'Sleep')
 
 if menu_id == 'Overview':
     st.header("📊 Overview")
@@ -687,7 +746,7 @@ if menu_id == 'Overview':
         value=today,
         max_value=today
     )
-    df = filter_csv_by_start_date(custom_range)
+    df = filter_csv_by_start_date(df, custom_range)
     polar_chart(df)
 
 elif menu_id == 'Growth':
