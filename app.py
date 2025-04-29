@@ -1,4 +1,5 @@
 import datetime
+from sklearn.preprocessing import PolynomialFeatures
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -6,6 +7,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 import streamlit_antd_components as sac
+from sklearn.linear_model import LinearRegression
 
 # https://matplotlib.org/stable/gallery/color/named_colors.html
 # Dummy data
@@ -23,7 +25,7 @@ default_end = today
 
 st.set_page_config(page_title="👶 Baby Tracker Dashboard", layout="wide")
 
-DF = pd.read_csv("data/huckelberry.csv", sep=",")
+DF = pd.read_csv("data/export.csv", sep=",")
 
 def filter_csv_by_category(data_frame, category):
     return data_frame[data_frame['Type'] == category]
@@ -31,6 +33,10 @@ def filter_csv_by_category(data_frame, category):
 def filter_csv_by_start_date(data_frame, start_date):
     data_frame["Start"] = pd.to_datetime(data_frame["Start"], errors='coerce')
     return data_frame[data_frame["Start"].dt.date == pd.to_datetime(start_date).date()]
+
+def get_last_updated_date(data_frame):
+    data_frame["Start"] = pd.to_datetime(data_frame["Start"], errors='coerce')
+    return  data_frame["Start"].max()
 
 def sleep_heatmap():
     # Step 1: Load and clean the sleep intervals
@@ -661,7 +667,7 @@ def sleep_per_day_chart(start_date, end_date):
     df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
     df['End'] = pd.to_datetime(df['End'], errors='coerce')
 
-    # Step 2: Filter by date range and start location
+    # Step 2: Filter by date range
     df = df[
         (df['Start'] >= start_date) &
         (df['Start'] <= end_date)
@@ -677,13 +683,18 @@ def sleep_per_day_chart(start_date, end_date):
     df['Date'] = df['Start'].dt.date
     daily_sleep = df.groupby('Date')['DurationHours'].sum().reset_index()
 
+    # Calculate average sleep across the range
+    avg_sleep = daily_sleep['DurationHours'].mean()
+
     # Plotly area chart (filled line)
     fig = go.Figure()
 
+    # Add daily sleep line
     fig.add_trace(go.Scatter(
         x=daily_sleep['Date'],
         y=daily_sleep['DurationHours'],
-        mode='lines+markers',
+        mode='lines+markers+text',
+        line_shape='spline',
         fill='tozeroy',
         line=dict(color='skyblue'),
         marker=dict(color='steelblue'),
@@ -691,17 +702,214 @@ def sleep_per_day_chart(start_date, end_date):
         hovertemplate='Date: %{x}<br>Total Sleep: %{y:.2f} hours<extra></extra>'
     ))
 
+    # Add average sleep dotted line
+    fig.add_trace(go.Scatter(
+        x=daily_sleep['Date'],
+        y=[avg_sleep] * len(daily_sleep),
+        mode='lines',
+        line=dict(color='darkgray', width=2, dash='dot'),
+        name=f'Average Sleep ({avg_sleep:.2f} hrs)',
+        hovertemplate='Date: %{x}<br>Average Sleep: %{y:.2f} hours<extra></extra>'
+    ))
+
     fig.update_layout(
         title='Total Sleep per Day',
         xaxis_title='Date',
         yaxis_title='Total Sleep (hours)',
         yaxis=dict(range=[0, 24]),
-        height=400
+        height=600
     )
 
-    st.plotly_chart(fig)
+    col1, col2 = st.columns ([4,1])
+    with col1:
+        st.plotly_chart(fig)
+    with col2:
+        st.subheader("Data:")
+        st.dataframe(daily_sleep)
 
+def wake_time_per_day_chart(start_date, end_date):
+    df = filter_csv_by_category(DF, 'Woke up')
 
+     # Parse datetime
+    df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
+
+    # Filter "Woke up" events
+    df_woke = df[
+        (df['Type'] == 'Woke up') &
+        (df['Start'] >= pd.to_datetime(start_date)) &
+        (df['Start'] <= pd.to_datetime(end_date))
+    ].copy()
+
+    if df_woke.empty:
+        st.warning("No 'Woke up' events found in the selected date range.")
+        return
+
+    # Extract date and time parts
+    df_woke['Date'] = df_woke['Start'].dt.date
+    df_woke['HourDecimal'] = df_woke['Start'].dt.hour + df_woke['Start'].dt.minute / 60
+
+    # Format as HH:MMh string
+    df_woke['HourStr'] = df_woke['Start'].dt.strftime('%H:%Mh')
+
+    # Compute average wake time
+    avg_wake_time = df_woke['HourDecimal'].mean()
+    avg_hour = int(avg_wake_time)
+    avg_minute = int((avg_wake_time % 1) * 60)
+    avg_str = f"{avg_hour:02}:{avg_minute:02}h"
+
+    # Plot
+    fig = go.Figure()
+
+    # Wake-up line
+    fig.add_trace(go.Scatter(
+        x=df_woke['Date'],
+        y=df_woke['HourDecimal'],
+        mode='lines+markers',
+        line_shape='spline',
+        fill='tozeroy',
+        line=dict(color='orange', width=2),
+        marker=dict(color='darkorange'),
+        name='Wake-Up Time',
+        customdata=df_woke['HourStr'],
+        hovertemplate="Date: %{x}<br>Wake-up: %{customdata}<extra></extra>"
+    ))
+
+    # Average dotted line
+    fig.add_trace(go.Scatter(
+        x=df_woke['Date'],
+        y=[avg_wake_time] * len(df_woke),
+        mode='lines',
+        line=dict(color='gray', dash='dot', width=2),
+        name=f'Average Wake-Up ({avg_str})',
+        hovertemplate="Date: %{x}<br>Avg Wake-up: {avg_str}<extra></extra>"
+    ))
+
+    min = int(df_woke['HourDecimal'].min()) - 1
+    max = int(df_woke['HourDecimal'].max()) + 1
+
+    fig.update_layout(
+        title='Wake-Up Time per Day',
+        xaxis_title='Date',
+        yaxis_title='Wake-Up Time',
+        yaxis=dict(
+            tickmode='array',
+            tickvals=list(range(min, max)),
+            ticktext=[f"{h:02}:00h" for h in range(min, max)],
+            range=[min, max]
+        ),
+        height=500
+    )
+
+    col1, col2 = st.columns ([4,1])
+    with col1:
+        st.plotly_chart(fig)
+    with col2:
+        st.subheader("Data:")
+        st.dataframe(df_woke)
+
+def bed_time_per_day_chart(start_date, end_date):
+    df = filter_csv_by_category(DF, 'Bed time')
+
+    # Parse datetime
+    df['Start'] = pd.to_datetime(df['Start'], errors='coerce')
+
+    # Filter "Bed time" events
+    df_woke = df[
+        (df['Type'] == 'Bed time') &
+        (df['Start'] >= pd.to_datetime(start_date)) &
+        (df['Start'] <= pd.to_datetime(end_date))
+    ].copy()
+
+    if df_woke.empty:
+        st.warning("No 'Bed time' events found in the selected date range.")
+        return
+
+    # Extract date and time parts
+    df_woke['Date'] = df_woke['Start'].dt.date
+    df_woke['HourDecimal'] = df_woke['Start'].dt.hour + df_woke['Start'].dt.minute / 60
+    df_woke['HourStr'] = df_woke['Start'].dt.strftime('%H:%Mh')
+
+    # Average bed time
+    avg_wake_time = df_woke['HourDecimal'].mean()
+    avg_hour = int(avg_wake_time)
+    avg_minute = int((avg_wake_time % 1) * 60)
+    avg_str = f"{avg_hour:02}:{avg_minute:02}h"
+
+    # Polynomial trend line: degree = 3 (can adjust this)
+    X = np.array([d.toordinal() for d in df_woke['Date']]).reshape(-1, 1)  # Date as numeric values
+    y = df_woke['HourDecimal'].values
+
+    # Create polynomial features
+    poly = PolynomialFeatures(degree=3)  # Degree can be changed
+    X_poly = poly.fit_transform(X)
+
+    # Fit polynomial regression model
+    model = LinearRegression()
+    model.fit(X_poly, y)
+
+    # Get the predicted values (polynomial trend)
+    trend_y = model.predict(X_poly)
+
+    # Plot
+    fig = go.Figure()
+
+    # Bed time line
+    fig.add_trace(go.Scatter(
+        x=df_woke['Date'],
+        y=df_woke['HourDecimal'],
+        mode='lines+markers',
+        line_shape='spline',
+        fill='tozeroy',
+        line=dict(color='red', width=2),
+        marker=dict(color='darkred'),
+        name='Bed Time',
+        customdata=df_woke['HourStr'],
+        hovertemplate="Date: %{x}<br>Bed time: %{customdata}<extra></extra>"
+    ))
+
+    # Average line
+    fig.add_trace(go.Scatter(
+        x=df_woke['Date'],
+        y=[avg_wake_time] * len(df_woke),
+        mode='lines',
+        line=dict(color='gray', dash='dot', width=2),
+        name=f'Average Bed time ({avg_str})',
+        hovertemplate="Date: %{x}<br>Avg Bed time: {avg_str}<extra></extra>"
+    ))
+
+    # Polynomial trend line
+    fig.add_trace(go.Scatter(
+        x=df_woke['Date'],
+        y=trend_y,
+        mode='lines',
+        line=dict(color='blue', dash='dot', width=2),
+        name='Polynomial Trend Line',
+        hoverinfo='skip'
+    ))
+
+    # Y-axis range
+    min_val = int(df_woke['HourDecimal'].min()) - 1
+    max_val = int(df_woke['HourDecimal'].max()) + 1
+
+    fig.update_layout(
+        title='Bed Time per Day',
+        xaxis_title='Date',
+        yaxis_title='Bed Time',
+        yaxis=dict(
+            tickmode='array',
+            tickvals=list(range(min_val, max_val)),
+            ticktext=[f"{h:02}:00h" for h in range(min_val, max_val)],
+            range=[min_val, max_val]
+        ),
+        height=500
+    )
+
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.plotly_chart(fig)
+    with col2:
+        st.subheader("Data:")
+        st.dataframe(df_woke)
 
 st.title("👶 Baby Tracker Dashboard")
 
@@ -727,8 +935,9 @@ if menu_id == 'Overview':
     
     custom_range = st.date_input(
         "Select custom date range",
-        value=today,
-        max_value=today
+        value=get_last_updated_date(DF),
+        max_value=get_last_updated_date(DF),
+        min_value="2025-01-15"
     )    
 
     col1, col2 = st.columns([2, 1], border=True)
@@ -780,6 +989,8 @@ elif menu_id == 'Sleep':
         st.write("🌞 Daily Sleep Trends")        
         start_date, end_date = calendar_filter()
         sleep_per_day_chart(start_date, end_date)
+        wake_time_per_day_chart(start_date, end_date)
+        bed_time_per_day_chart(start_date, end_date)
 
     with tab3:
         st.write("🌞 Nap Duration")
