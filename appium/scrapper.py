@@ -31,13 +31,8 @@ def replace_spanish_months(date_str):
 def convert_date_format(date_str):
     # Replace Spanish months with English months
     date_str = replace_spanish_months(date_str)
-
-    # Parse the date string into a datetime object
-    date_object = datetime.strptime(date_str, "%B %d %Y")
-
-    # Format the date object into the desired format
-    formatted_date = date_object.strftime("%Y-%m-%d")
-
+    parsed_date = datetime.strptime(date_str, "%B %d").replace(year=2025)
+    formatted_date = parsed_date.strftime("%Y-%m-%d")
     return formatted_date
 
 def map_values(event):    
@@ -153,7 +148,7 @@ EVENTS = [NAP_RESOURCE_ID, NURSING_RESOURCE_ID, BOTTLE_RESOURCE_ID, WOKE_UP_RESO
 
 driver = webdriver.Remote("http://192.168.56.1:4723", options=options)
 
-current_day = driver.find_element(By.XPATH, "//android.view.ViewGroup[@resource-id='NewOldHistoryHeader-CalendarPicker']")
+current_day = driver.find_element(By.XPATH, "//android.view.ViewGroup[@resource-id='TimeMachineHeader-MiddleDateButton']")
 current_day = convert_date_format(current_day.tag_name.split(",")[0])
 
 
