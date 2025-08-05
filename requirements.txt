@@ -4,3 +4,4 @@ matplotlib==3.10.1
 streamlit==1.44.1
 streamlit-antd-components==0.3.2
 scikit-learn
+Appium-Python-Client
