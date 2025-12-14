@@ -48,7 +48,7 @@ def map_values(event):
         "se despertó": WOKE_UP_RESOURCE_ID,
         "mojado": "Pee",
         "sucio": "Poo",
-        "sueño": NIGHT_SLEEP
+        "sueño": NIGHT_SLEEP,
         "medicina": MEDICINE_RESOURCE_ID
     }
 
@@ -157,7 +157,7 @@ NIGHT_SLEEP = "NIGHT_SLEEP"
 
 EVENTS = [NAP_RESOURCE_ID, NURSING_RESOURCE_ID, BOTTLE_RESOURCE_ID, WOKE_UP_RESOURCE_ID, NIGHT_WAKING_RESOURCE_ID, DIAPER_RESOURCE_ID, BED_TIME_RESOURCE_ID]
 
-driver = webdriver.Remote("http://192.168.68.65:4723", options=options)
+driver = webdriver.Remote("http://192.168.68.67:4723", options=options)
 
 while True:
     current_day = driver.find_element(By.XPATH, "//android.view.ViewGroup[@resource-id='TimeMachineHeader-MiddleDateButton']")
@@ -262,8 +262,7 @@ while True:
 
     # Escribir el nuevo bloque primero, seguido del contenido anterior
     with open("log.txt", "w", encoding="utf-8") as f:
-        f.write(log_block + old_content)
+        f.write(log_block + "\n" + old_content)
 
     scroll_right_to_left()
     time.sleep(3)
-    pass
