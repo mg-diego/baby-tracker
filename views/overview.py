@@ -106,35 +106,45 @@ class OverviewSection:
         
         st.caption(f"📊 Global stats based on {len(self.df)} records.")
 
-        # --- SECCIÓN 1: SLEEP ---
+        # Definir las columnas
         c1, c2, c3 = st.columns(3)
-        
+
+        # COLUMNA 1: SLEEP
         with c1:
-            st.markdown("### 💤 Sleep & Rest")
-            st.metric(
-                "Total Sleep Time", 
-                f"{fmt_num(total_sleep_hrs)} h", 
-                help=f"🌙 Night: {fmt_num(night_sleep_hrs)}h\n☀️ Nap: {fmt_num(nap_sleep_hrs)}h",
-                border=True
-            )
-            st.metric("Total Naps", fmt_int(total_naps_count), border=True)
-            st.metric("Night Wakings", fmt_int(total_wakings_count), border=True)
+            # Usamos un contenedor con borde para agrupar toda la columna
+            with st.container(border=True):
+                st.markdown("### 💤 Sleep & Rest")
+                st.metric(
+                    "Total Sleep Time", 
+                    f"{fmt_num(total_sleep_hrs)} h", 
+                    help=f"🌙 Night: {fmt_num(night_sleep_hrs)}h\n☀️ Nap: {fmt_num(nap_sleep_hrs)}h",
+                    # border=True  <-- Opcional: Puedes quitarlo aquí si el contenedor ya tiene borde
+                )
+                st.metric("Total Naps", fmt_int(total_naps_count))
+                st.metric("Night Wakings", fmt_int(total_wakings_count))
 
+        # COLUMNA 2: FEEDING
         with c2:
-            st.markdown("### 🍼 Feeding")
-            st.metric("Breastfeeding Time", f"{fmt_num(total_breast_hrs)} h", border=True)
-            st.metric("Bottles Given", fmt_int(total_bottles), border=True)# Formato inteligente L vs ml
-            if total_formula_vol > 1000:
-                vol_str = f"{fmt_num(total_formula_vol/1000)} L"
-            else:
-                vol_str = f"{fmt_int(total_formula_vol)} ml"
-            st.metric("Formula Consumed", vol_str, border=True)
+            with st.container(border=True):
+                st.markdown("### 🍼 Feeding")
+                st.metric("Breastfeeding Time", f"{fmt_num(total_breast_hrs)} h")
+                st.metric("Bottles Given", fmt_int(total_bottles))
+                
+                # Lógica de formato
+                if total_formula_vol > 1000:
+                    vol_str = f"{fmt_num(total_formula_vol/1000)} L"
+                else:
+                    vol_str = f"{fmt_int(total_formula_vol)} ml"
+                    
+                st.metric("Formula Consumed", vol_str)
 
+        # COLUMNA 3: DIAPERS
         with c3:
-            st.markdown("### 🩲 Diapers")
-            st.metric("Total Diapers", fmt_int(total_diapers), border=True)
-            st.metric("Pee (Wet)", fmt_int(total_pee), border=True)
-            st.metric("Poo (Dirty)", fmt_int(total_poo), border=True)
+            with st.container(border=True):
+                st.markdown("### 🩲 Diapers")
+                st.metric("Total Diapers", fmt_int(total_diapers))
+                st.metric("Pee (Wet)", fmt_int(total_pee))
+                st.metric("Poo (Dirty)", fmt_int(total_poo))
 
 
     def _render_daily_view(self):
