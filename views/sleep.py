@@ -20,23 +20,32 @@ def _format_duration_str(seconds):
 
 def _prepare_sleep_gantt_data(main_df):
     """
-    Calcula ventanas de sueño (Start -> End) y añade el tiempo despierto previo.
+    Versión ROBUSTA: Limpia espacios en blanco y normaliza texto para evitar
+    que eventos se pierdan por errores de formato (ej. "Nap " vs "Nap").
     """
+    # Definimos categorías base
     cats = ['Sleep', 'Bed time', 'Woke up', 'Night waking']
+    
+    # 1. Limpieza preliminar de columnas de texto clave
+    # Aseguramos que existan y limpiamos espacios alrededor
+    if 'Type' in main_df.columns:
+        main_df['Type'] = main_df['Type'].fillna("").astype(str).str.strip()
     
     if 'Notes' not in main_df.columns:
         main_df['Notes'] = ""
+    main_df['Notes'] = main_df['Notes'].fillna("").astype(str).str.strip()
 
+    # 2. Filtrar
     df = main_df[main_df['Type'].isin(cats)].copy()
-    df['Notes'] = df['Notes'].fillna("").astype(str)
     
     if df.empty:
         return pd.DataFrame()
 
+    # 3. Fechas y Ordenamiento
     df['Start'] = pd.to_datetime(df['Start'])
     df['End'] = pd.to_datetime(df['End'])
 
-    # Prioridad para empates de hora
+    # Prioridad: Bed time(0) -> Night waking(1) -> Sleep(2) -> Woke up(3)
     priority_map = {'Bed time': 0, 'Night waking': 1, 'Sleep': 2, 'Woke up': 3}
     df['Order'] = df['Type'].map(priority_map).fillna(2)
 
@@ -45,73 +54,73 @@ def _prepare_sleep_gantt_data(main_df):
     processed_rows = []
     
     is_night_mode = False
-    # El buffer ahora guardará tuplas: (fila, tiempo_despierto_previo)
     night_sleep_buffer = [] 
     has_waking = False
-    
-    # Variable para rastrear el fin del ÚLTIMO sueño (sea siesta o nocturno)
     last_sleep_end = None
     
     for _, row in df.iterrows():
-        evt_type = row['Type']
-        note_val = row['Notes'].strip()
+        evt_type = row['Type'] # Ya está limpio (sin espacios)
+        note_val_lower = row['Notes'].lower() # Usamos minúsculas para comparar
         
+        # --- MÁQUINA DE ESTADOS ---
+
         if evt_type == 'Bed time':
             is_night_mode = True
             night_sleep_buffer = []
             has_waking = False
             
         elif evt_type == 'Woke up':
+            # Cerramos la noche
             if is_night_mode:
-                # Decidir calidad de la noche
-                if not has_waking and len(night_sleep_buffer) == 1:
-                    quality = "🟣 Night Sleep (Solid)"
-                else:
-                    quality = "🔵 Night Sleep (Interrupted)"
-                
-                # Procesar buffer (desempaquetamos fila y wake_window)
+                quality = "🟣 Night Sleep (Solid)" if (not has_waking and len(night_sleep_buffer) == 1) else "🔵 Night Sleep (Interrupted)"
                 for s_row, s_wake_str in night_sleep_buffer:
                     _process_visual_row(s_row, quality, processed_rows, s_wake_str)
                 
                 is_night_mode = False
                 night_sleep_buffer = []
+            else:
+                # Si encontramos un Woke up pero NO estábamos en modo noche,
+                # no hacemos nada crítico, solo aseguramos que el flag esté apagado.
+                is_night_mode = False
 
         elif evt_type == 'Night waking':
             if is_night_mode:
                 has_waking = True
 
         elif evt_type == 'Sleep':
-            # 1. Calcular tiempo despierto antes de este sueño
+            # Calcular Wake Window
             wake_window_str = "-"
             if last_sleep_end is not None:
-                # Calculamos diferencia desde el fin del último sueño hasta el inicio de este
                 diff_seconds = (row['Start'] - last_sleep_end).total_seconds()
-                # Solo si es positivo (por seguridad)
                 if diff_seconds > 0:
                     wake_window_str = _format_duration_str(diff_seconds)
             
-            # 2. Actualizamos el tracker INMEDIATAMENTE para el siguiente
             last_sleep_end = row['End']
 
-            # 3. Lógica de clasificación
-            if note_val == 'Nap':
+            # --- LÓGICA DE CLASIFICACIÓN MEJORADA ---
+            
+            # 1. Si la nota contiene "nap", ES UNA SIESTA (Prioridad absoluta)
+            if 'nap' in note_val_lower:
                 _process_visual_row(row, "🌫️ Nap", processed_rows, wake_window_str)
                 
-            elif note_val == 'Night Sleep':
+            # 2. Si la nota contiene "night sleep", ES SUEÑO NOCTURNO
+            elif 'night sleep' in note_val_lower:
                 if is_night_mode:
-                    # Guardamos la fila Y el cálculo de tiempo despierto en el buffer
                     night_sleep_buffer.append((row, wake_window_str))
                 else:
+                    # Caso borde: Night Sleep fuera de contenedor Bedtime->Wokeup
                     _process_visual_row(row, "🔵 Night Sleep (Interrupted)", processed_rows, wake_window_str)
             
+            # 3. Si no hay nota (Fallback)
             else:
-                # Fallback sin etiqueta
                 if is_night_mode:
+                    # Si estamos en horario nocturno, asumimos que es parte de la noche
                     night_sleep_buffer.append((row, wake_window_str))
                 else:
+                    # Si es de día, asumimos que es siesta
                     _process_visual_row(row, "🌫️ Nap", processed_rows, wake_window_str)
 
-    # Limpieza final buffer
+    # Limpieza final del buffer (si el archivo acaba a mitad de noche)
     if is_night_mode and night_sleep_buffer:
         status = "Night Sleep (Interrupted)" if has_waking else "Night Sleep (Solid)"
         for s_row, s_wake_str in night_sleep_buffer:
@@ -191,7 +200,7 @@ class SleepSection:
         tab1, tab2, tab3, tab4 = st.tabs([
             "Sleep Timeline", 
             "Sleep Trends", 
-            "Nap Duration", 
+            "Nap Trends", 
             "Nighttime Wakeups"
         ])
 
@@ -210,9 +219,8 @@ class SleepSection:
             self._bed_time_per_day_chart(show_text=show_labels)
 
         with tab3:
-            st.write("🌞 Nap Duration")
-            fig3 = px.bar(self.dummy_data, x='Date', y='Nap Duration (hrs)', title='Daytime Nap Duration')
-            st.plotly_chart(fig3, use_container_width=True)
+            st.write("🌞 Nap Trends")
+            self._naps_stacked_chart()
 
         with tab4:
             st.write('🌙 Nighttime Wakeups')
@@ -488,3 +496,90 @@ class SleepSection:
         with col2:
             st.caption("Data:")
             st.dataframe(bed_time, height=400)
+
+    def _naps_stacked_chart(self):
+        # 1. Filtrar Datos (Igual que antes)
+        df = DataManager.filter_by_category(self.df, 'Sleep')
+        df = DataManager.filter_by_date_range(df, self.start_date, self.end_date)
+        
+        if 'Notes' not in df.columns: df['Notes'] = ""
+        df['Notes'] = df['Notes'].fillna("").astype(str)
+
+        # Quedarnos solo con siestas (No Night Sleep)
+        df = df[df['Notes'] != 'Night Sleep'].copy()
+        df = df.dropna(subset=['Start', 'End'])
+        
+        if df.empty:
+            st.info("No nap data available for this period.")
+            return
+
+        # 2. Cálculos básicos para las barras
+        df['DurationHours'] = (df['End'] - df['Start']).dt.total_seconds() / 3600
+        df['Date'] = df['Start'].dt.date
+        df['StartTimeStr'] = df['Start'].dt.strftime('%H:%M')
+        df['EndTimeStr'] = df['End'].dt.strftime('%H:%M')
+
+        # Asignar NapRank (Nap 1, Nap 2...)
+        df = df.sort_values(by=['Start'])
+        df['NapRank'] = df.groupby('Date').cumcount() + 1
+        df['NapName'] = 'Nap ' + df['NapRank'].astype(str)
+
+        # --- NUEVO: CÁLCULO PARA LA LÍNEA DE TOTALES ---
+        daily_totals = df.groupby('Date')['DurationHours'].sum().reset_index()
+        # -----------------------------------------------
+
+        # 3. Configurar Colores (Azules)
+        color_map = {
+            'Nap 1': '#ADD8E6', 'Nap 2': '#87CEEB', 'Nap 3': '#4682B4',
+            'Nap 4': '#4169E1', 'Nap 5': '#0000CD', 'Nap 6': '#00008B'
+        }
+
+        # 4. Crear el Gráfico Base (Barras Apiladas)
+        fig = px.bar(
+            df,
+            x='Date',
+            y='DurationHours',
+            color='NapName',
+            title='Total Nap Duration (Stacked + Daily Total)',
+            color_discrete_map=color_map,
+            custom_data=['StartTimeStr', 'EndTimeStr', 'DurationHours']
+        )
+
+        # Tooltip de las barras
+        fig.update_traces(
+            hovertemplate=(
+                '<b>%{x}</b><br>%{fullData.name}<br>'
+                'Time: %{customdata[0]} - %{customdata[1]}<br>'
+                'Duration: %{customdata[2]:.2f} h<extra></extra>'
+            )
+        )
+
+        # 5. --- AÑADIR LA LÍNEA DE TOTALES ---
+        fig.add_trace(go.Scatter(
+            x=daily_totals['Date'],
+            y=daily_totals['DurationHours'],
+            mode='lines+markers+text', # Línea + Puntos + Texto
+            name='Total Daily',
+            line_shape='spline',
+            line=dict(color='darkgoldenrod', width=3, dash='dot'), # Color oscuro para contrastar
+            text=daily_totals['DurationHours'].apply(lambda x: f"{x:.1f}h"), # Etiqueta con el valor
+            textposition='top center',
+            hovertemplate='<b>Total: %{y:.2f} h</b><extra></extra>'
+        ))
+
+        # 6. Ajuste del Eje Y
+        if not daily_totals.empty:
+            max_h = int(daily_totals['DurationHours'].max()) + 2 # +2 para dejar espacio al texto de la línea
+        else:
+            max_h = 5
+
+        fig.update_layout(
+            xaxis_title='Date',
+            yaxis_title='Total Hours',
+            yaxis=dict(range=[0, max_h]),
+            legend_title_text='Order',
+            height=500,
+            margin=dict(l=0, r=0, t=40, b=0)
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
