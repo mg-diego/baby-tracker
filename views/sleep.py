@@ -3,9 +3,173 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+from datetime import timedelta, datetime
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from data_manager import DataManager
+
+# --- FUNCIONES AUXILIARES ---
+
+def _format_duration_str(seconds):
+    """Convierte segundos a formato '1h 30m' o '45m'"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    if h > 0:
+        return f"{h}h {m:02d}m"
+    return f"{m}m"
+
+def _prepare_sleep_gantt_data(main_df):
+    """
+    Calcula ventanas de sueño (Start -> End) y añade el tiempo despierto previo.
+    """
+    cats = ['Sleep', 'Bed time', 'Woke up', 'Night waking']
+    
+    if 'Notes' not in main_df.columns:
+        main_df['Notes'] = ""
+
+    df = main_df[main_df['Type'].isin(cats)].copy()
+    df['Notes'] = df['Notes'].fillna("").astype(str)
+    
+    if df.empty:
+        return pd.DataFrame()
+
+    df['Start'] = pd.to_datetime(df['Start'])
+    df['End'] = pd.to_datetime(df['End'])
+
+    # Prioridad para empates de hora
+    priority_map = {'Bed time': 0, 'Night waking': 1, 'Sleep': 2, 'Woke up': 3}
+    df['Order'] = df['Type'].map(priority_map).fillna(2)
+
+    df = df.sort_values(by=['Start', 'Order']).reset_index(drop=True)
+
+    processed_rows = []
+    
+    is_night_mode = False
+    # El buffer ahora guardará tuplas: (fila, tiempo_despierto_previo)
+    night_sleep_buffer = [] 
+    has_waking = False
+    
+    # Variable para rastrear el fin del ÚLTIMO sueño (sea siesta o nocturno)
+    last_sleep_end = None
+    
+    for _, row in df.iterrows():
+        evt_type = row['Type']
+        note_val = row['Notes'].strip()
+        
+        if evt_type == 'Bed time':
+            is_night_mode = True
+            night_sleep_buffer = []
+            has_waking = False
+            
+        elif evt_type == 'Woke up':
+            if is_night_mode:
+                # Decidir calidad de la noche
+                if not has_waking and len(night_sleep_buffer) == 1:
+                    quality = "🟣 Night Sleep (Solid)"
+                else:
+                    quality = "🔵 Night Sleep (Interrupted)"
+                
+                # Procesar buffer (desempaquetamos fila y wake_window)
+                for s_row, s_wake_str in night_sleep_buffer:
+                    _process_visual_row(s_row, quality, processed_rows, s_wake_str)
+                
+                is_night_mode = False
+                night_sleep_buffer = []
+
+        elif evt_type == 'Night waking':
+            if is_night_mode:
+                has_waking = True
+
+        elif evt_type == 'Sleep':
+            # 1. Calcular tiempo despierto antes de este sueño
+            wake_window_str = "-"
+            if last_sleep_end is not None:
+                # Calculamos diferencia desde el fin del último sueño hasta el inicio de este
+                diff_seconds = (row['Start'] - last_sleep_end).total_seconds()
+                # Solo si es positivo (por seguridad)
+                if diff_seconds > 0:
+                    wake_window_str = _format_duration_str(diff_seconds)
+            
+            # 2. Actualizamos el tracker INMEDIATAMENTE para el siguiente
+            last_sleep_end = row['End']
+
+            # 3. Lógica de clasificación
+            if note_val == 'Nap':
+                _process_visual_row(row, "🌫️ Nap", processed_rows, wake_window_str)
+                
+            elif note_val == 'Night Sleep':
+                if is_night_mode:
+                    # Guardamos la fila Y el cálculo de tiempo despierto en el buffer
+                    night_sleep_buffer.append((row, wake_window_str))
+                else:
+                    _process_visual_row(row, "🔵 Night Sleep (Interrupted)", processed_rows, wake_window_str)
+            
+            else:
+                # Fallback sin etiqueta
+                if is_night_mode:
+                    night_sleep_buffer.append((row, wake_window_str))
+                else:
+                    _process_visual_row(row, "🌫️ Nap", processed_rows, wake_window_str)
+
+    # Limpieza final buffer
+    if is_night_mode and night_sleep_buffer:
+        status = "Night Sleep (Interrupted)" if has_waking else "Night Sleep (Solid)"
+        for s_row, s_wake_str in night_sleep_buffer:
+             _process_visual_row(s_row, status, processed_rows, s_wake_str)
+
+    return pd.DataFrame(processed_rows)
+
+def _process_visual_row(row, status, processed_rows_list, wake_window_str="-"):
+    """
+    Añade la fila visual con el nuevo parámetro wake_window_str
+    """
+    s_start = row['Start']
+    s_end = row['End']
+    
+    if pd.isnull(s_start) or pd.isnull(s_end):
+        return
+
+    total_seconds = (s_end - s_start).total_seconds()
+    if total_seconds <= 0: return
+    total_duration_str = _format_duration_str(total_seconds)
+
+    def add_item(date_val, start_h, duration_h, s_str, e_str):
+        processed_rows_list.append({
+            'Date': date_val,
+            'StartHour': start_h,
+            'Duration': duration_h,
+            'StartTimeStr': s_str,
+            'EndTimeStr': e_str,
+            'TotalDurationStr': total_duration_str,
+            'Status': status,
+            'Color': _get_color_by_status(status),
+            'WakeWindow': wake_window_str  # <--- NUEVO CAMPO
+        })
+
+    if s_start.date() == s_end.date():
+        duration_h = (s_end - s_start).total_seconds() / 3600
+        add_item(s_start.date(), s_start.hour + s_start.minute/60, duration_h, 
+                 s_start.strftime('%H:%M'), s_end.strftime('%H:%M'))
+    else:
+        midnight_day1 = (s_start + timedelta(days=1)).replace(hour=0, minute=0, second=0)
+        duration_1 = (midnight_day1 - s_start).total_seconds() / 3600
+        add_item(s_start.date(), s_start.hour + s_start.minute/60, duration_1, 
+                 s_start.strftime('%H:%M'), "24:00")
+        
+        midnight_day2 = s_end.replace(hour=0, minute=0, second=0)
+        duration_2 = (s_end - midnight_day2).total_seconds() / 3600
+        if duration_2 > 0:
+            add_item(s_end.date(), 0, duration_2, "00:00", s_end.strftime('%H:%M'))
+
+def _get_color_by_status(status):
+    if status == "🟣 Night Sleep (Solid)":
+        return "#8A2BE2" # 🟣 BlueViolet (Destacado)
+    elif status == "🔵 Night Sleep (Interrupted)":
+        return "royalblue" # 🔵 Azul normal
+    else:
+        return "#ADD8E6" # 🌫️ LightBlue (Siestas)
+
+# --- CLASE PRINCIPAL ---
 
 class SleepSection:
     def __init__(self, df, start_date, end_date):
@@ -13,8 +177,6 @@ class SleepSection:
         self.start_date = start_date
         self.end_date = end_date
         
-        # Datos Dummy originales para las pestañas 3 y 4 (Nap Duration y Night Wakeups)
-        # Tal como estaban en el script original al principio
         self.dummy_data = pd.DataFrame({
             'Date': pd.date_range(start='2024-04-01', periods=7, freq='D'),
             'Total Sleep (hrs)': [12, 13, 11.5, 14, 12.2, 13.3, 12.8],
@@ -26,98 +188,97 @@ class SleepSection:
         st.header("💤 Sleep Patterns")
         st.write("Visualize sleep logs or averages.")
 
-        tab1, tab2, tab3, tab4 = st.tabs(["Sleep/Awake Chart", "Daily Sleep Trends", "Nap Duration", "Nighttime Wakeups"])
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "Sleep Timeline", 
+            "Sleep Trends", 
+            "Nap Duration", 
+            "Nighttime Wakeups"
+        ])
 
         with tab1:
-            st.write("🛌 Sleep/Awake Chart")
-            st.write("This heatmap visualizes the baby's sleep and wake patterns... 'royalblue' indicates sleep, while 'lightblue' represents awake periods.", unsafe_allow_html=True)
-            self._sleep_heatmap()
+            st.write("🛌 Sleep Timeline")
+            st.caption("Blue bars indicate sleep periods.")
+            self._sleep_timeline_chart()
         
         with tab2:
-            st.write("🌞 Daily Sleep Trends")       
-            self._sleep_per_day_chart()
-            self._wake_time_per_day_chart()
-            self._bed_time_per_day_chart()
+            st.write("💤 Sleep Trends")
+            col_ctrl, _ = st.columns([1, 3])
+            with col_ctrl:
+                show_labels = st.toggle("Show chart values", value=True)  
+            self._sleep_per_day_chart(show_text=show_labels)
+            self._wake_time_per_day_chart(show_text=show_labels)
+            self._bed_time_per_day_chart(show_text=show_labels)
 
         with tab3:
             st.write("🌞 Nap Duration")
-            fig3 = px.bar(self.dummy_data, x='Date', y='Nap Duration (hrs)', title='Daytime Nap Duration2')
+            fig3 = px.bar(self.dummy_data, x='Date', y='Nap Duration (hrs)', title='Daytime Nap Duration')
             st.plotly_chart(fig3, use_container_width=True)
 
         with tab4:
-            st.write('🌙 Nighttime Wakeups lorem ipsum')
+            st.write('🌙 Nighttime Wakeups')
             fig4 = px.line(self.dummy_data, x='Date', y='Night Wakeups', markers=True, title='Night Wakeups Per Day')
             st.plotly_chart(fig4, use_container_width=True)
 
-    def _sleep_heatmap(self):
-        sleep_df = DataManager.filter_by_category(self.df, 'Sleep')
-        # No aplicamos filtro de fechas estricto aquí para mostrar todo el heatmap disponible o el rango relevante
-        # pero usamos dropna para asegurar integridad
-        sleep_df = sleep_df.dropna(subset=['Start', 'End'])
+    def _sleep_timeline_chart(self):
+        gantt_data = _prepare_sleep_gantt_data(self.df)
         
-        if sleep_df.empty:
-            st.warning("No sleep data available for heatmap.")
+        if gantt_data.empty:
+            st.info("No sleep data available.")
             return
 
-        # Get date range based on data
-        oldest_date = sleep_df['Start'].min().replace(hour=0, minute=0, second=0, microsecond=0)
-        newest_date = sleep_df['Start'].max().replace(hour=0, minute=0, second=0, microsecond=0)
+        fig = go.Figure()
 
-        data = {
-            'datetime': pd.date_range(start=oldest_date, end=newest_date + pd.Timedelta(days=1), freq='5min'),
-        }
-        df_grid = pd.DataFrame(data)
-        df_grid['date'] = df_grid['datetime'].dt.date
-        df_grid['hour'] = df_grid['datetime'].dt.strftime('%H:%M')
+        fig.add_trace(go.Bar(
+            y=gantt_data['Date'],
+            x=gantt_data['Duration'],
+            base=gantt_data['StartHour'],
+            orientation='h',
+            marker=dict(
+                color=gantt_data['Color'],
+                line=dict(width=0)
+            ),
+            name='Sleep',
+            customdata=np.stack((
+                gantt_data['StartTimeStr'],      # 0
+                gantt_data['EndTimeStr'],        # 1
+                gantt_data['TotalDurationStr'],  # 2
+                gantt_data['Status'],            # 3
+                gantt_data['WakeWindow']         # 4
+            ), axis=-1),
 
-        # Prepare intervals
-        sleep_intervals = list(zip(sleep_df['Start'], sleep_df['End']))
-
-        # Function to apply sleep state
-        def is_asleep(timestamp):
-            for start, end in sleep_intervals:
-                if start <= timestamp < end:
-                    return 1
-            return 0
-
-        # Optimization: Apply map directly (slower than numpy but safe for this logic)
-        df_grid['state'] = df_grid['datetime'].map(is_asleep)
-
-        # Pivot table
-        heatmap_data = df_grid.pivot(index='date', columns='hour', values='state').fillna(0)
-
-        fig = go.Figure(data=go.Heatmap(
-            z=heatmap_data.values,
-            x=heatmap_data.columns,
-            y=heatmap_data.index,
-            colorscale=[[0.0, "lightblue"], [1.0, "royalblue"]],
-            showscale=False,
-            hovertemplate='Date: %{y}<br>Hour: %{x}<br>'
+            hovertemplate=(
+                '<b>%{y}</b><br>' +
+                '%{customdata[3]}<br>' +
+                'Time: %{customdata[0]} - %{customdata[1]}<br>' +
+                'Duration: %{customdata[2]}<br>' +
+                '<b>Awake Before: %{customdata[4]}</b>' +
+                '<extra></extra>'
+            )
         ))
 
         fig.update_layout(
-            xaxis=dict(title="Hour", side="top"),
-            yaxis=dict(
-                title="Date",
-                autorange=True,
-                tickmode="array",
-                tickvals=heatmap_data.index.tolist(),
-                ticktext=[str(d) for d in heatmap_data.index],
+            xaxis=dict(
+                title="Time of Day",
+                range=[0, 24],
+                tickmode='array',
+                tickvals=[0, 4, 8, 12, 16, 20, 24],
+                ticktext=['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'],
+                side='top'
             ),
-            height=max(400, 15 * len(heatmap_data.index))
+            yaxis=dict(
+                title=None,
+                type='category'
+            ),
+            height=max(400, 25 * len(gantt_data['Date'].unique())),
+            margin=dict(l=0, r=10, t=30, b=0),
+            showlegend=False,
+            hovermode="closest"
         )
-
-        st.markdown(
-            f'<div style="text-align: center;">'
-            f'<div style="display: inline-block; width: 25px; height: 25px; background-color: royalblue;"></div> Sleep &nbsp;'
-            f'<div style="display: inline-block; width: 25px; height: 25px; background-color: lightblue; margin-left: 30px;"></div> Awake'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-
+        
+        st.caption("🟣 Solid Night | 🔵 Interrupted Night | 🌫️ Nap")
         st.plotly_chart(fig, use_container_width=True)
 
-    def _sleep_per_day_chart(self):
+    def _sleep_per_day_chart(self, show_text=True):
         df = DataManager.filter_by_category(self.df, 'Sleep')
         df = DataManager.filter_by_date_range(df, self.start_date, self.end_date)
         df = df.dropna(subset=['Start', 'End'])
@@ -131,192 +292,199 @@ class SleepSection:
 
         avg_sleep = daily_sleep['DurationHours'].mean()
 
+        mode_val = 'lines+markers+text' if show_text else 'lines+markers'
+        text_tpl = '%{y:.1f} h' if show_text else None
+        hover_info = 'skip' if show_text else None 
+        hover_tpl = None if show_text else '<b>%{x}</b><br>Total: %{y:.1f} h<extra></extra>'
+
         fig = go.Figure()
 
-        # Daily sleep line
         fig.add_trace(go.Scatter(
             x=daily_sleep['Date'],
             y=daily_sleep['DurationHours'],
-            mode='lines+markers+text',
+            mode=mode_val,
             line_shape='spline',
             fill='tozeroy',
             line=dict(color='skyblue'),
             marker=dict(color='steelblue'),
-            name='Total Sleep',
-            hovertemplate='Date: %{x}<br>Total Sleep: %{y:.2f} hours<extra></extra>'
+            name='Total Sleep',texttemplate=text_tpl,
+            textposition="top center",
+            hoverinfo=hover_info,
+            hovertemplate=hover_tpl
         ))
 
-        # Average line
         fig.add_trace(go.Scatter(
             x=daily_sleep['Date'],
             y=[avg_sleep] * len(daily_sleep),
             mode='lines',
             line=dict(color='darkgray', width=2, dash='dot'),
-            name=f'Average Sleep ({avg_sleep:.2f} hrs)',
-            hovertemplate='Date: %{x}<br>Average Sleep: %{y:.2f} hours<extra></extra>'
+            name=f'Average ({avg_sleep:.1f}h)',
+            hoverinfo='skip'
         ))
 
         fig.update_layout(
             title='Total Sleep per Day',
             xaxis_title='Date',
-            yaxis_title='Total Sleep (hours)',
+            yaxis_title='Hours',
             yaxis=dict(range=[0, 24]),
-            height=600
+            height=500,
+            margin=dict(l=0, r=0, t=40, b=0)
         )
 
         col1, col2 = st.columns([4, 1])
         with col1:
-            st.plotly_chart(fig)
+            st.plotly_chart(fig, use_container_width=True)
         with col2:
-            st.subheader("Data:")
-            st.dataframe(daily_sleep)
+            st.caption("Data:")
+            st.dataframe(daily_sleep, height=400)
 
-    def _wake_time_per_day_chart(self):
+    def _wake_time_per_day_chart(self, show_text=True):
         df = DataManager.filter_by_category(self.df, 'Woke up')
         df = DataManager.filter_by_date_range(df, self.start_date, self.end_date)
         
         if df.empty:
-            st.warning("No 'Woke up' events found in the selected date range.")
+            st.info("No 'Woke up' events recorded.")
             return
 
         df = df.copy()
         df['Date'] = df['Start'].dt.date
         df['HourDecimal'] = df['Start'].dt.hour + df['Start'].dt.minute / 60
-        df['HourStr'] = df['Start'].dt.strftime('%H:%Mh')
+        df['HourStr'] = df['Start'].dt.strftime('%H:%M')
 
-        avg_wake_time = df['HourDecimal'].mean()
-        avg_hour = int(avg_wake_time)
-        avg_minute = int((avg_wake_time % 1) * 60)
-        avg_str = f"{avg_hour:02}:{avg_minute:02}h"
+        avg_val = df['HourDecimal'].mean()
+        avg_str = f"{int(avg_val):02}:{int((avg_val % 1) * 60):02}"
+        wake_time = df.groupby('Date')['HourStr'].sum().reset_index()
+
+        mode_val = 'lines+markers+text' if show_text else 'lines+markers'
+        text_tpl = '%{customdata}' if show_text else None
+        hover_info = 'skip' if show_text else None
+        hover_tpl = None if show_text else '<b>%{x}</b><br>Time: %{customdata}<extra></extra>'
 
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
             x=df['Date'],
             y=df['HourDecimal'],
-            mode='lines+markers',
+            mode=mode_val,
             line_shape='spline',
-            fill='tozeroy',
             line=dict(color='orange', width=2),
             marker=dict(color='darkorange'),
-            name='Wake-Up Time',
-            customdata=df['HourStr'],
-            hovertemplate="Date: %{x}<br>Wake-up: %{customdata}<extra></extra>"
+            name='Wake Up',
+            texttemplate=text_tpl,
+            textposition="top center",
+            hoverinfo=hover_info,
+            hovertemplate=hover_tpl,
+            customdata=df['HourStr']
         ))
 
         fig.add_trace(go.Scatter(
             x=df['Date'],
-            y=[avg_wake_time] * len(df),
+            y=[avg_val] * len(df),
             mode='lines',
-            line=dict(color='gray', dash='dot', width=2),
-            name=f'Average Wake-Up ({avg_str})',
-            hovertemplate="Date: %{x}<br>Avg Wake-up: {avg_str}<extra></extra>"
+            line=dict(color='gray', dash='dot'),
+            name=f'Avg: {avg_str}',
+            hoverinfo='skip'
         ))
 
-        min_val = int(df['HourDecimal'].min()) - 1
-        max_val = int(df['HourDecimal'].max()) + 1
+        min_h = int(df['HourDecimal'].min()) - 1
+        max_h = int(df['HourDecimal'].max()) + 1
 
         fig.update_layout(
-            title='Wake-Up Time per Day',
-            xaxis_title='Date',
-            yaxis_title='Wake-Up Time',
+            title='Wake Up Time',
             yaxis=dict(
+                range=[min_h, max_h],
                 tickmode='array',
-                tickvals=list(range(min_val, max_val)),
-                ticktext=[f"{h:02}:00h" for h in range(min_val, max_val)],
-                range=[min_val, max_val]
+                tickvals=list(range(min_h, max_h+1)),
+                ticktext=[f"{h:02}:00" for h in range(min_h, max_h+1)]
             ),
-            height=500
+            height=400,
+            margin=dict(l=0, r=0, t=40, b=0)
         )
 
         col1, col2 = st.columns([4, 1])
         with col1:
-            st.plotly_chart(fig)
+            st.plotly_chart(fig, use_container_width=True)
         with col2:
-            st.subheader("Data:")
-            st.dataframe(df[['Date', 'Start', 'HourStr']])
+            st.caption("Data:")
+            st.dataframe(wake_time, height=400)
 
-    def _bed_time_per_day_chart(self):
+    def _bed_time_per_day_chart(self, show_text=True):
         df = DataManager.filter_by_category(self.df, 'Bed time')
         df = DataManager.filter_by_date_range(df, self.start_date, self.end_date)
         
         if df.empty:
-            st.warning("No 'Bed time' events found in the selected date range.")
+            st.info("No 'Bed time' events recorded.")
             return
 
         df = df.copy()
         df['Date'] = df['Start'].dt.date
         df['HourDecimal'] = df['Start'].dt.hour + df['Start'].dt.minute / 60
-        df['HourStr'] = df['Start'].dt.strftime('%H:%Mh')
+        df['HourStr'] = df['Start'].dt.strftime('%H:%M')
+        
+        bed_time = df.groupby('Date')['HourStr'].sum().reset_index()
 
-        avg_wake_time = df['HourDecimal'].mean()
-        avg_hour = int(avg_wake_time)
-        avg_minute = int((avg_wake_time % 1) * 60)
-        avg_str = f"{avg_hour:02}:{avg_minute:02}h"
-
-        # Polynomial Regression
+        # Regresión
         X = np.array([d.toordinal() for d in df['Date']]).reshape(-1, 1)
         y = df['HourDecimal'].values
         
-        poly = PolynomialFeatures(degree=3)
-        X_poly = poly.fit_transform(X)
-        
-        model = LinearRegression()
-        model.fit(X_poly, y)
-        trend_y = model.predict(X_poly)
+        try:
+            poly = PolynomialFeatures(degree=3)
+            X_poly = poly.fit_transform(X)
+            model = LinearRegression()
+            model.fit(X_poly, y)
+            trend_y = model.predict(X_poly)
+            has_trend = True
+        except:
+            has_trend = False
 
+        mode_val = 'lines+markers+text' if show_text else 'lines+markers'
+        text_tpl = '%{customdata}' if show_text else None
+        hover_info = 'skip' if show_text else None
+        hover_tpl = None if show_text else '<b>%{x}</b><br>Time: %{customdata}<extra></extra>'
+        
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
             x=df['Date'],
             y=df['HourDecimal'],
-            mode='lines+markers',
+            mode=mode_val,
             line_shape='spline',
-            fill='tozeroy',
-            line=dict(color='red', width=2),
-            marker=dict(color='darkred'),
-            name='Bed Time',
-            customdata=df['HourStr'],
-            hovertemplate="Date: %{x}<br>Bed time: %{customdata}<extra></extra>"
+            line=dict(color='firebrick', width=2),
+            name='Bed Time',texttemplate=text_tpl,
+            textposition="top center",
+            hoverinfo=hover_info,
+            hovertemplate=hover_tpl,
+            customdata=df['HourStr']
         ))
 
-        fig.add_trace(go.Scatter(
-            x=df['Date'],
-            y=[avg_wake_time] * len(df),
-            mode='lines',
-            line=dict(color='gray', dash='dot', width=2),
-            name=f'Average Bed time ({avg_str})',
-            hovertemplate="Date: %{x}<br>Avg Bed time: {avg_str}<extra></extra>"
-        ))
+        if has_trend:
+            fig.add_trace(go.Scatter(
+                x=df['Date'],
+                y=trend_y,
+                mode='lines',
+                line=dict(color='blue', dash='dot', width=2),
+                name='Trend',
+                hoverinfo='skip'
+            ))
 
-        fig.add_trace(go.Scatter(
-            x=df['Date'],
-            y=trend_y,
-            mode='lines',
-            line=dict(color='blue', dash='dot', width=2),
-            name='Polynomial Trend Line',
-            hoverinfo='skip'
-        ))
-
-        min_val = int(df['HourDecimal'].min()) - 1
-        max_val = int(df['HourDecimal'].max()) + 1
+        min_h = int(df['HourDecimal'].min()) - 1
+        max_h = int(df['HourDecimal'].max()) + 1
 
         fig.update_layout(
-            title='Bed Time per Day',
-            xaxis_title='Date',
-            yaxis_title='Bed Time',
+            title='Bed Time Trend',
             yaxis=dict(
+                range=[min_h, max_h],
                 tickmode='array',
-                tickvals=list(range(min_val, max_val)),
-                ticktext=[f"{h:02}:00h" for h in range(min_val, max_val)],
-                range=[min_val, max_val]
+                tickvals=list(range(min_h, max_h+1)),
+                ticktext=[f"{h:02}:00" for h in range(min_h, max_h+1)]
             ),
-            height=500
+            height=400,
+            margin=dict(l=0, r=0, t=40, b=0)
         )
 
         col1, col2 = st.columns([4, 1])
         with col1:
-            st.plotly_chart(fig)
+            st.plotly_chart(fig, use_container_width=True)
         with col2:
-            st.subheader("Data:")
-            st.dataframe(df[['Date', 'Start', 'HourStr']])
+            st.caption("Data:")
+            st.dataframe(bed_time, height=400)

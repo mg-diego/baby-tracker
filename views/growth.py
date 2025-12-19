@@ -67,7 +67,7 @@ class GrowthSection:
         fig.add_trace(go.Scatter(
             x=df['Months'], 
             y=df[measure_name],
-            mode='lines+markers',
+            mode='lines+markers+text', 
             name=f"Baby's {value_column}",
             line=dict(color=marker_color, width=2),
             marker=dict(
@@ -76,8 +76,14 @@ class GrowthSection:
                 color=marker_color,
                 line=dict(width=2, color='black')
             ),
-            hovertemplate=f'Date: %{{customdata[0]}}<br>{value_column}: %{{y:.1f}} {unit}<br>',
-            customdata=df['Date'].dt.strftime('%Y-%m-%d').to_frame().values
+            texttemplate=f'%{{y:.1f}} {unit}',
+            textposition="top center",
+            textfont=dict(
+                family="Arial",
+                size=12,
+                color=marker_color
+            ),
+            hoverinfo='skip' 
         ))
 
         # Percentiles

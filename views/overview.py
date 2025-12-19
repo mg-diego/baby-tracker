@@ -12,31 +12,20 @@ class OverviewSection:
 
     def render(self):
         st.header("📊 Overview")
+        tab1, tab2 = st.tabs(["📅 Daily Overview", "🌍 Global Metrics (All Time)"])
 
-        # Crear las dos pestañas
-        tab1, tab2 = st.tabs(["🌍 Global Metrics (All Time)", "📅 Daily Overview"])
-
-        # --- TAB 1: MÉTRICAS GLOBALES ---
-        with tab1:
+        with tab1:            
+            self._render_daily_view()
+        with tab2:
             self._render_global_metrics()
 
-        # --- TAB 2: VISTA DIARIA (POLAR) ---
-        with tab2:
-            self._render_daily_view()
-
     def _render_global_metrics(self):
-        # --- HELPERS DE FORMATO ---
-        def fmt_num(val): # Decimales (Horas, Litros)
+        def fmt_num(val):
             return f"{val:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-        def fmt_int(val): # Enteros (Conteos)
+        def fmt_int(val):
             return f"{val:,.0f}".replace(",", ".")
-
-        # ==========================================
-        # 1. CÁLCULOS (Lógica de Datos)
-        # ==========================================
         
-        # --- SUEÑO ---
         sleep_df = DataManager.filter_by_category(self.df, 'Sleep')
         waking_df = DataManager.filter_by_category(self.df, 'Night waking')
         
@@ -46,11 +35,8 @@ class OverviewSection:
         total_naps_count = 0
         
         if not sleep_df.empty:
-            # Detección robusta de siestas
             is_nap = sleep_df.astype(str).apply(lambda x: x.str.contains('Nap', case=False)).any(axis=1)
-            total_naps_count = is_nap.sum()
-            
-            # Cálculos de tiempo
+            total_naps_count = is_nap.sum()            
             valid_sleep = sleep_df.dropna(subset=['Start', 'End']).copy()
             if not valid_sleep.empty:
                 # Recalcular is_nap para filas válidas
@@ -63,18 +49,15 @@ class OverviewSection:
 
         total_wakings_count = len(waking_df)
 
-        # --- ALIMENTACIÓN ---
+
         feed_df = DataManager.filter_by_category(self.df, 'Feed')
-        is_bottle = feed_df.astype(str).apply(lambda x: x.str.contains('Bottle|Formula', case=False)).any(axis=1)
-        
-        # Pecho
+        is_bottle = feed_df.astype(str).apply(lambda x: x.str.contains('Bottle|Formula', case=False)).any(axis=1)        
         breast_df = feed_df[~is_bottle].copy()
         total_breast_hrs = 0
         if not breast_df.empty:
             valid_breast = breast_df.dropna(subset=['Start', 'End'])
             total_breast_hrs = (valid_breast['End'] - valid_breast['Start']).dt.total_seconds().sum() / 3600
 
-        # Biberón
         bottle_df = feed_df[is_bottle].copy()
         total_bottles = len(bottle_df)
         total_formula_vol = 0
@@ -89,7 +72,7 @@ class OverviewSection:
                 return 0
             total_formula_vol = bottle_df.apply(extract_ml, axis=1).sum()
 
-        # --- PAÑALES ---
+
         diaper_df = DataManager.filter_by_category(self.df, 'Diaper')
         total_diapers = len(diaper_df)
         total_pee = 0
@@ -100,37 +83,26 @@ class OverviewSection:
             total_pee = text_data.str.contains('pee|mojado', na=False).sum()
             total_poo = text_data.str.contains('poo|sucio', na=False).sum()
 
-        # ==========================================
-        # 2. PRESENTACIÓN VISUAL (Layout)
-        # ==========================================
         
         st.caption(f"📊 Global stats based on {len(self.df)} records.")
-
-        # Definir las columnas
         c1, c2, c3 = st.columns(3)
-
-        # COLUMNA 1: SLEEP
         with c1:
-            # Usamos un contenedor con borde para agrupar toda la columna
             with st.container(border=True):
                 st.markdown("### 💤 Sleep & Rest")
                 st.metric(
                     "Total Sleep Time", 
                     f"{fmt_num(total_sleep_hrs)} h", 
                     help=f"🌙 Night: {fmt_num(night_sleep_hrs)}h\n☀️ Nap: {fmt_num(nap_sleep_hrs)}h",
-                    # border=True  <-- Opcional: Puedes quitarlo aquí si el contenedor ya tiene borde
                 )
                 st.metric("Total Naps", fmt_int(total_naps_count))
                 st.metric("Night Wakings", fmt_int(total_wakings_count))
 
-        # COLUMNA 2: FEEDING
         with c2:
             with st.container(border=True):
                 st.markdown("### 🍼 Feeding")
                 st.metric("Breastfeeding Time", f"{fmt_num(total_breast_hrs)} h")
                 st.metric("Bottles Given", fmt_int(total_bottles))
                 
-                # Lógica de formato
                 if total_formula_vol > 1000:
                     vol_str = f"{fmt_num(total_formula_vol/1000)} L"
                 else:
@@ -138,7 +110,6 @@ class OverviewSection:
                     
                 st.metric("Formula Consumed", vol_str)
 
-        # COLUMNA 3: DIAPERS
         with c3:
             with st.container(border=True):
                 st.markdown("### 🩲 Diapers")
@@ -148,13 +119,11 @@ class OverviewSection:
 
 
     def _render_daily_view(self):
-        # Obtener la última fecha disponible para el valor por defecto
         if not self.df.empty and 'Start' in self.df.columns:
             last_updated = self.df["Start"].max()
         else:
             last_updated = datetime.datetime.now()
 
-        # Selector de fecha
         col_date, _ = st.columns([1, 2])
         with col_date:
             custom_date = st.date_input(
@@ -164,20 +133,16 @@ class OverviewSection:
                 min_value=datetime.date(2024, 1, 1)
             )
 
-        # Filtrar el DataFrame solo para el día seleccionado
         mask = self.df["Start"].dt.date == pd.to_datetime(custom_date).date()
         daily_df = self.df[mask].copy()
 
         col1, col2 = st.columns([2, 1], border=True)
         
-        # Renderizar gráfico y obtener métricas
         with col1:
             metrics = self._polar_chart(daily_df)
         
-        # Desempaquetar métricas
         woke_up, bed_time, diapers, feeds, naps, night_wakes = metrics
 
-        # Renderizar resumen lateral
         with col2:
             st.subheader(f"📅 {custom_date.strftime('%d %b %Y')}")
             st.divider()
@@ -191,7 +156,6 @@ class OverviewSection:
             st.write(f"**⚡ Night Wakings:** {night_wakes}")
 
     def _polar_chart(self, data_frame):
-        # Copia de la lógica robusta del gráfico polar
         single_events = ['Woke up', 'Bed time', 'Bed Time', 'Diaper']
         segment_events = ['Sleep', 'Night waking', 'Feed']
 
@@ -213,7 +177,7 @@ class OverviewSection:
         bed_time = '-'
         diaper_count_total = 0
 
-        # 1. Puntos
+        # SINGLE EVENTS
         for event in single_events:        
             event_df = data_frame[data_frame['Type'].str.lower() == event.lower()]
             if event_df.empty: continue
@@ -237,7 +201,7 @@ class OverviewSection:
                 eventos[key] = to_decimal(time_val)
                 diaper_counter += 1 
 
-        # 2. Segmentos
+        # SEGMENTED EVENTS  
         feed_counter = 0
         nap_counter = 0
         night_waking_counter = 0
@@ -291,7 +255,6 @@ class OverviewSection:
         if bed_time == '-' and first_night_sleep_time:
             bed_time = f"{first_night_sleep_time}*"
 
-        # 3. Marcadores
         for evento, hora in eventos.items():
             angulo = hora_a_angulo(hora)
             base_name = evento.split()[0]
