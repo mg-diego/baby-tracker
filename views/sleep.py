@@ -232,7 +232,6 @@ class SleepSection:
             self._night_waking_scatter_chart()
 
             st.divider()
-
             st.subheader('The "Cursed Hour" 🕰️')
             st.caption("Distribution of wakings by hour. The darkest bar indicates the most frequent waking time.")
             self._cursed_hour_histogram()
@@ -243,7 +242,7 @@ class SleepSection:
         if gantt_data.empty:
             st.info("No sleep data available.")
             return
-
+    
         fig = go.Figure()
 
         fig.add_trace(go.Bar(

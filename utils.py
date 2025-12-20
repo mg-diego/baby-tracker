@@ -35,7 +35,7 @@ class Utils:
                 start_date, end_date = default_start, default_end
         else:
             if selection == 'All Time':
-                days = 1000 
+                days = 10000
             else:
                 days = int(selection.split()[1])
             start_date = today - datetime.timedelta(days=days)
