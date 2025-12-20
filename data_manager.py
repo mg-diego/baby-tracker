@@ -28,7 +28,11 @@ class DataManager:
             return pd.DataFrame()
 
     @staticmethod
-    def filter_by_category(df: pd.DataFrame, category: str) -> pd.DataFrame:
+    def filter_by_category(df, category):
+        # Si 'category' es una lista o tupla, usamos .isin()
+        if isinstance(category, (list, tuple)):
+            return df[df['Type'].isin(category)].copy()
+        # Si es un string normal, usamos ==
         return df[df['Type'] == category].copy()
 
     @staticmethod
