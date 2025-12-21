@@ -20,34 +20,29 @@ def _format_duration_str(seconds):
 
 def _prepare_sleep_gantt_data(main_df):
     """
-    Versión ROBUSTA: Limpia espacios en blanco y normaliza texto para evitar
-    que eventos se pierdan por errores de formato (ej. "Nap " vs "Nap").
+    Versión actualizada para dibujar barras ROJAS en Night Waking.
     """
-    # Definimos categorías base
     cats = ['Sleep', 'Bed time', 'Woke up', 'Night waking']
     
-    # 1. Limpieza preliminar de columnas de texto clave
-    # Aseguramos que existan y limpiamos espacios alrededor
+    # Limpieza previa
     if 'Type' in main_df.columns:
         main_df['Type'] = main_df['Type'].fillna("").astype(str).str.strip()
-    
     if 'Notes' not in main_df.columns:
         main_df['Notes'] = ""
     main_df['Notes'] = main_df['Notes'].fillna("").astype(str).str.strip()
 
-    # 2. Filtrar
     df = main_df[main_df['Type'].isin(cats)].copy()
     
-    if df.empty:
-        return pd.DataFrame()
+    if df.empty: return pd.DataFrame()
 
-    # 3. Fechas y Ordenamiento
     df['Start'] = pd.to_datetime(df['Start'])
     df['End'] = pd.to_datetime(df['End'])
 
-    # Prioridad: Bed time(0) -> Night waking(1) -> Sleep(2) -> Woke up(3)
-    priority_map = {'Bed time': 0, 'Night waking': 1, 'Sleep': 2, 'Woke up': 3}
-    df['Order'] = df['Type'].map(priority_map).fillna(2)
+    # Prioridad visual (Order):
+    # Queremos que el despertar se pinte "encima" si hay solapamiento, 
+    # aunque en teoría no debería haber solapamiento temporal.
+    priority_map = {'Bed time': 0, 'Sleep': 1, 'Night waking': 2, 'Woke up': 3}
+    df['Order'] = df['Type'].map(priority_map).fillna(1)
 
     df = df.sort_values(by=['Start', 'Order']).reset_index(drop=True)
 
@@ -59,36 +54,34 @@ def _prepare_sleep_gantt_data(main_df):
     last_sleep_end = None
     
     for _, row in df.iterrows():
-        evt_type = row['Type'] # Ya está limpio (sin espacios)
-        note_val_lower = row['Notes'].lower() # Usamos minúsculas para comparar
+        evt_type = row['Type']
+        note_val_lower = row['Notes'].lower()
         
-        # --- MÁQUINA DE ESTADOS ---
-
         if evt_type == 'Bed time':
             is_night_mode = True
             night_sleep_buffer = []
             has_waking = False
             
         elif evt_type == 'Woke up':
-            # Cerramos la noche
             if is_night_mode:
                 quality = "🟣 Night Sleep (Solid)" if (not has_waking and len(night_sleep_buffer) == 1) else "🔵 Night Sleep (Interrupted)"
                 for s_row, s_wake_str in night_sleep_buffer:
                     _process_visual_row(s_row, quality, processed_rows, s_wake_str)
-                
                 is_night_mode = False
                 night_sleep_buffer = []
             else:
-                # Si encontramos un Woke up pero NO estábamos en modo noche,
-                # no hacemos nada crítico, solo aseguramos que el flag esté apagado.
                 is_night_mode = False
 
         elif evt_type == 'Night waking':
             if is_night_mode:
                 has_waking = True
+            
+            # --- CAMBIO AQUÍ: DIBUJAR LA BARRA ROJA ---
+            # Procesamos visualmente este evento como una barra independiente
+            _process_visual_row(row, "🔴 Night Waking", processed_rows, wake_window_str="-")
+            # ------------------------------------------
 
         elif evt_type == 'Sleep':
-            # Calcular Wake Window
             wake_window_str = "-"
             if last_sleep_end is not None:
                 diff_seconds = (row['Start'] - last_sleep_end).total_seconds()
@@ -97,30 +90,19 @@ def _prepare_sleep_gantt_data(main_df):
             
             last_sleep_end = row['End']
 
-            # --- LÓGICA DE CLASIFICACIÓN MEJORADA ---
-            
-            # 1. Si la nota contiene "nap", ES UNA SIESTA (Prioridad absoluta)
             if 'nap' in note_val_lower:
                 _process_visual_row(row, "🌫️ Nap", processed_rows, wake_window_str)
-                
-            # 2. Si la nota contiene "night sleep", ES SUEÑO NOCTURNO
             elif 'night sleep' in note_val_lower:
                 if is_night_mode:
                     night_sleep_buffer.append((row, wake_window_str))
                 else:
-                    # Caso borde: Night Sleep fuera de contenedor Bedtime->Wokeup
                     _process_visual_row(row, "🔵 Night Sleep (Interrupted)", processed_rows, wake_window_str)
-            
-            # 3. Si no hay nota (Fallback)
             else:
                 if is_night_mode:
-                    # Si estamos en horario nocturno, asumimos que es parte de la noche
                     night_sleep_buffer.append((row, wake_window_str))
                 else:
-                    # Si es de día, asumimos que es siesta
                     _process_visual_row(row, "🌫️ Nap", processed_rows, wake_window_str)
 
-    # Limpieza final del buffer (si el archivo acaba a mitad de noche)
     if is_night_mode and night_sleep_buffer:
         status = "Night Sleep (Interrupted)" if has_waking else "Night Sleep (Solid)"
         for s_row, s_wake_str in night_sleep_buffer:
@@ -172,11 +154,13 @@ def _process_visual_row(row, status, processed_rows_list, wake_window_str="-"):
 
 def _get_color_by_status(status):
     if status == "🟣 Night Sleep (Solid)":
-        return "#8A2BE2" # 🟣 BlueViolet (Destacado)
+        return "#8A2BE2" # BlueViolet
     elif status == "🔵 Night Sleep (Interrupted)":
-        return "royalblue" # 🔵 Azul normal
+        return "royalblue"
+    elif status == "🔴 Night Waking": # <--- NUEVO CASO
+        return "#b00000" # OrangeRed (Rojo vibrante)
     else:
-        return "#ADD8E6" # 🌫️ LightBlue (Siestas)
+        return "#ADD8E6" # LightBlue (Nap)
 
 # --- CLASE PRINCIPAL ---
 
@@ -237,30 +221,131 @@ class SleepSection:
             self._cursed_hour_histogram()
 
     def _sleep_timeline_chart(self):
-        gantt_data = _prepare_sleep_gantt_data(self.df)
+        # 1. Filtrar datos
+        df_filtered = DataManager.filter_by_date_range(self.df, self.start_date, self.end_date)
+        gantt_data = _prepare_sleep_gantt_data(df_filtered)
         
         if gantt_data.empty:
             st.info("No sleep data available.")
             return
-    
+
+        # --- NUEVO: SWITCH MODO NOCHE ---
+        # Colocamos el toggle arriba a la derecha o izquierda
+        col_tog, _ = st.columns([1, 4])
+        with col_tog:
+            is_night_mode = st.toggle("🌙 Night Mode", value=False, help="Centers the chart around the night and zooms in on sleep hours.")
+
+        # --- LÓGICA DE TRANSFORMACIÓN DE DATOS ---
+        # Trabajamos sobre una copia para no romper nada
+        plot_data = gantt_data.copy()
+        
+        # Configuración de Ejes por defecto (Modo Día 0-24)
+        xaxis_range = [0, 24]
+        tick_vals = [0, 4, 8, 12, 16, 20, 24]
+        tick_text = ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00']
+
+        if is_night_mode:
+            # 1. Transformar las horas de la madrugada (AM)
+            # Si una tarea empieza antes de las 12:00 del mediodía, asumimos que pertenece 
+            # visualmente a la "noche extendida" del día anterior.
+            # Ejemplo: 02:00 AM pasa a ser la hora 26:00 del día previo.
+            
+            # Identificamos filas de la madrugada (StartHour < 12)
+            am_mask = plot_data['StartHour'] < 12
+            
+            # Desplazamos la hora +24
+            plot_data.loc[am_mask, 'StartHour'] += 24
+            
+            # Desplazamos la fecha -1 día para que se agrupe con la noche anterior
+            plot_data.loc[am_mask, 'Date'] -= timedelta(days=1)
+            
+            # 2. Calcular el rango dinámico (Filtro del eje X)
+            # Buscamos el Bed time más temprano (mínimo) y el Woke up más tardío (máximo extendido)
+            
+            # Mínimo: Consideramos horas a partir de las 12:00 (mediodía original)
+            # para evitar coger siestas de la mañana como inicio de la noche.
+            valid_starts = plot_data['StartHour']
+            min_x = valid_starts.min()
+            
+            # Máximo: StartHour + Duration
+            max_x = (plot_data['StartHour'] + plot_data['Duration']).max()
+            
+            # Añadimos un pequeño margen (pad) de 30 mins (0.5h)
+            min_x =  max(12, int(min_x) - 0.5) # No bajar de 12:00
+            max_x =  int(max_x) + 0.5
+            
+            xaxis_range = [min_x, max_x]
+            
+            # 3. Generar Ticks bonitos para el eje extendido
+            # Creamos ticks cada 2 horas dentro del rango
+            tick_vals = list(range(int(min_x), int(max_x) + 2, 2))
+            # La función lambda convierte "26" en "02:00"
+            tick_text = [f"{(h-24):02d}:00" if h >= 24 else f"{h:02d}:00" for h in tick_vals]
+
+        # --- NUEVO: LÓGICA DE SEPARADORES DE MES ---
+        # Obtenemos las fechas únicas ordenadas cronológicamente
+        unique_dates = sorted(gantt_data['Date'].unique())
+        
+        month_lines = []
+        month_annotations = []
+        
+        # Iteramos para encontrar dónde cambia el mes
+        for i in range(1, len(unique_dates)):
+            curr_date = unique_dates[i]
+            prev_date = unique_dates[i-1]
+            
+            # Si el mes cambia respecto al día anterior
+            if curr_date.month != prev_date.month:
+                # En un eje categórico, la posición entre el índice i-1 y el i es i-0.5
+                line_pos = i - 0.5
+                
+                # Etiqueta (Ej: "February 2025")
+                month_label = curr_date.strftime("%B %Y")
+                
+                # 1. La Línea Horizontal
+                month_lines.append(dict(
+                    type="line",
+                    x0=0, x1=24,       # De 00:00 a 24:00
+                    y0=line_pos, y1=line_pos,
+                    line=dict(color="black", width=1, dash="dash"),
+                    layer="below"      # Detrás de las barras
+                ))
+                
+                # 2. El Texto del Mes
+                mid_point = (xaxis_range[0] + xaxis_range[1]) / 2
+                month_annotations.append(dict(
+                    x=mid_point,              # Centrado en el mediodía
+                    y=line_pos,
+                    text=month_label,
+                    showarrow=False,
+                    yshift=0,
+                    font=dict(color="black", size=10, weight="bold"),
+                    # Fondo blanco semi-transparente para que se lea si cae sobre una barra azul
+                    bgcolor="rgba(255, 255, 255, 0.8)", 
+                    bordercolor="black",
+                    borderwidth=1,
+                    borderpad=4
+                ))
+
+        # --- CREACIÓN DEL GRÁFICO ---
         fig = go.Figure()
 
         fig.add_trace(go.Bar(
-            y=gantt_data['Date'],
-            x=gantt_data['Duration'],
-            base=gantt_data['StartHour'],
+            y=plot_data['Date'],
+            x=plot_data['Duration'],
+            base=plot_data['StartHour'],
             orientation='h',
             marker=dict(
-                color=gantt_data['Color'],
+                color=plot_data['Color'],
                 line=dict(width=0)
             ),
             name='Sleep',
             customdata=np.stack((
-                gantt_data['StartTimeStr'],      # 0
-                gantt_data['EndTimeStr'],        # 1
-                gantt_data['TotalDurationStr'],  # 2
-                gantt_data['Status'],            # 3
-                gantt_data['WakeWindow']         # 4
+                plot_data['StartTimeStr'],      # 0
+                plot_data['EndTimeStr'],        # 1
+                plot_data['TotalDurationStr'],  # 2
+                plot_data['Status'],            # 3
+                plot_data['WakeWindow']         # 4
             ), axis=-1),
 
             hovertemplate=(
@@ -276,28 +361,35 @@ class SleepSection:
         fig.update_layout(
             xaxis=dict(
                 title="Time of Day",
-                range=[0, 24],
+                range=xaxis_range, # Rango dinámico
                 tickmode='array',
-                tickvals=[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24],
-                ticktext=['00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00', '24:00'],
+                tickvals=tick_vals, # Ticks dinámicos
+                ticktext=tick_text, # Etiquetas dinámicas (26 -> 02:00)
                 side='top',
                 showgrid=True,
                 gridcolor='rgba(200,200,200,0.2)',
                 gridwidth=1,
-                fixedrange=True
+                fixedrange=True,
+                showspikes=True, 
+                spikemode='across', 
+                spikesnap='cursor', 
+                showline=True, 
+                spikecolor="black"
             ),
             yaxis=dict(
                 title=None,
                 type='category',
                 fixedrange=True
             ),
-            height=max(400, 25 * len(gantt_data['Date'].unique())),
+            shapes=month_lines,
+            annotations=month_annotations,
+            height=max(400, 25 * len(unique_dates)),
             margin=dict(l=0, r=10, t=30, b=0),
             showlegend=False,
             hovermode="closest"
         )
         
-        st.caption("🟣 Solid Night | 🔵 Interrupted Night | 🌫️ Nap")
+        st.caption("🟣 Solid Night | 🔵 Interrupted Night | 🔴 Night Waking | 🌫️ Nap")
         st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False, 'displayModeBar': False})
 
     def _sleep_per_day_chart(self, show_text=True):

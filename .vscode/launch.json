@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Streamlit Debugger: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/app.py",  // Ruta del archivo .py que ejecuta Streamlit
+            "args": [
+                "run",
+                "${workspaceFolder}/app.py"  // Ejecuta Streamlit con el archivo app.py
+            ],
+            "console": "integratedTerminal"
+        }
+    ]
+}

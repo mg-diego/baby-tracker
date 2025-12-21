@@ -38,10 +38,15 @@ class FeedingSection:
 
         with tab2:
             st.write("🍼 Bottle Feeding Trends")
-            
-            # 1. Gráfica de Volumen Total Diario (La más crítica para el crecimiento)
             self._bottle_intake_chart()
             
+            st.divider()
+
+            # --- NUEVO: INTERVALOS ---
+            st.subheader("⏳ Time Between Bottles")
+            st.caption("Are intervals getting longer and more consistent?")
+            self._bottle_interval_trend()
+
             st.divider()
 
             # 2. Gráfica de Patrones (Hora vs Cantidad)
@@ -218,17 +223,13 @@ class FeedingSection:
         df = DataManager.filter_by_category(self.df, 'Feed')
         df = DataManager.filter_by_date_range(df, self.start_date, self.end_date)
         
-        # Filtrar solo lo que NO sea 'Breast' (asumimos todo lo demás es biberón/fórmula)
-        # O buscar explícitamente "Bottle" si tienes esa columna 'Type'
         if 'Start Location' in df.columns:
-            df = df[df['Start Location'].str.lower() != 'breast']
+            df = df[df['Start Location'].str.lower() == 'bottle']
         
-        # Limpieza de la columna Amount (ej. "150ml" -> 150.0)
-        # Asumimos que la columna se llama 'Amount' o similar en tu CSV
-        col_amount = 'Amount' if 'Amount' in df.columns else 'Quantity' # Fallback
+        col_amount = 'Duration' if 'Duration' in df.columns else 'Quantity' # Fallback
         
         if col_amount not in df.columns:
-            return pd.DataFrame() # No hay columna de cantidad
+            return pd.DataFrame()
 
         df = df.copy()
         
@@ -238,10 +239,9 @@ class FeedingSection:
             try:
                 return float(s)
             except:
-                return 0.0
-
+                return 0.0        
+        
         df['AmountNum'] = df[col_amount].apply(parse_amount)
-        # Filtrar cantidades 0 o erróneas
         df = df[df['AmountNum'] > 0]
         
         return df
@@ -370,4 +370,74 @@ class FeedingSection:
             margin=dict(l=0, r=0, t=40, b=0),
             yaxis=dict(tickmode='linear', dtick=1) # Forzar enteros en eje Y
         )
+        st.plotly_chart(fig, use_container_width=True)
+
+    def _bottle_interval_trend(self):
+        df = self._get_bottle_data()
+        if df.empty: return
+
+        # Ordenar cronológicamente
+        df = df.sort_values(by='Start')
+        
+        # Calcular diferencia con la fila anterior (en horas)
+        df['IntervalHours'] = df['Start'].diff().dt.total_seconds() / 3600
+        
+        # Filtrar intervalos lógicos:
+        # - Menor de 12 horas (para no contar la noche como un intervalo diurno normal)
+        # - Mayor de 1 hora (para no contar una pausa breve como nueva toma)
+        df_intervals = df[(df['IntervalHours'] > 0.5) & (df['IntervalHours'] < 10)].copy()
+        
+        if df_intervals.empty:
+            st.info("Not enough sequential data for intervals.")
+            return
+
+        df_intervals['Date'] = df_intervals['Start'].dt.date
+        
+        # Agrupar por día para ver el promedio diario
+        daily_avg = df_intervals.groupby('Date')['IntervalHours'].mean().reset_index()
+        
+        # Tendencia suavizada
+        daily_avg['Trend'] = daily_avg['IntervalHours'].rolling(window=7, min_periods=1).mean()
+
+        fig = go.Figure()
+
+        # Puntos reales (dispersos) para ver la variabilidad
+        fig.add_trace(go.Scatter(
+            x=df_intervals['Start'],
+            y=df_intervals['IntervalHours'],
+            mode='markers',
+            name='Individual Feed',
+            marker=dict(color='lightgray', size=4, opacity=0.5),
+            hoverinfo='skip'
+        ))
+
+        # Línea de promedio diario
+        fig.add_trace(go.Scatter(
+            x=daily_avg['Date'],
+            y=daily_avg['IntervalHours'],
+            mode='lines+markers',
+            name='Daily Avg Interval',
+            line=dict(color='#4682B4', width=2), # SteelBlue
+            hovertemplate='<b>%{x}</b><br>Avg Interval: %{y:.1f} h<extra></extra>'
+        ))
+
+        # Línea de tendencia
+        fig.add_trace(go.Scatter(
+            x=daily_avg['Date'],
+            y=daily_avg['Trend'],
+            mode='lines',
+            name='7-Day Trend',
+            line=dict(color='navy', width=3, dash='dot'),
+            hoverinfo='skip'
+        ))
+
+        fig.update_layout(
+            title="Gap Between Feeds Evolution",
+            xaxis_title="Date",
+            yaxis_title="Hours Between Bottles",
+            height=400,
+            margin=dict(l=0, r=0, t=40, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+
         st.plotly_chart(fig, use_container_width=True)
