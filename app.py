@@ -27,11 +27,11 @@ class BabyTrackerApp:
         with st.sidebar:
             menu_id = sac.menu(
                 items=[
-                    sac.MenuItem('Overview', icon='bar-chart'),
-                    sac.MenuItem('Growth', icon='line-chart'),            
-                    sac.MenuItem('Sleep', icon='clock-circle'),
-                    sac.MenuItem('Feeding', icon='coffee'),
-                    sac.MenuItem('Diapers', icon='smile'),
+                    sac.MenuItem('Overview'),
+                    sac.MenuItem('Growth'),            
+                    sac.MenuItem('Sleep'),
+                    sac.MenuItem('Feeding'),
+                    sac.MenuItem('Diapers'),
                 ],
                 open_all=True, index=0
             )
