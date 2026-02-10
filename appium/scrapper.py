@@ -37,9 +37,40 @@ def convert_date_format(date_str):
     formatted_date = parsed_date.strftime("%Y-%m-%d")
     return formatted_date
 
+
+def convert_date_format_previous_year(date_str):
+    # 1. Diccionario de abreviaturas en español
+    spanish_months = {
+        "ene": "Jan", "feb": "Feb", "mar": "Mar", "abr": "Apr",
+        "may": "May", "jun": "Jun", "jul": "Jul", "ago": "Aug",
+        "sep": "Sep", "oct": "Oct", "nov": "Nov", "dic": "Dec"
+    }
+
+    # 2. Limpieza de la cadena:
+    # Quitamos el punto, el símbolo 'º' y pasamos a minúsculas para comparar
+    clean_date = date_str.replace(".", "").replace("º", "").lower()
+    
+    # Separamos el mes y el día
+    parts = clean_date.split()
+    if len(parts) != 2:
+        return None # O maneja el error según necesites
+
+    month_es, day = parts[0], parts[1]
+
+    # 3. Traducir mes
+    month_en = spanish_months.get(month_es, month_es)
+
+    # 4. Reconstruir y parsear
+    # Usamos %b para abreviaturas (Jan, Dec, etc.)
+    final_str = f"{month_en} {day}"
+    parsed_date = datetime.strptime(final_str, "%b %d").replace(year=2025)
+    
+    return parsed_date.strftime("%Y-%m-%d")
+
 def map_values(event):    
     translations = {
         "fórmula": BOTTLE_RESOURCE_ID,
+        "otro": MILK_RESOURCE_ID,
         "lactancia": NURSING_RESOURCE_ID,
         "cambio de pañal": DIAPER_RESOURCE_ID,
         "se durmió": BED_TIME_RESOURCE_ID,
@@ -49,7 +80,8 @@ def map_values(event):
         "mojado": "Pee",
         "sucio": "Poo",
         "sueño": NIGHT_SLEEP,
-        "medicina": MEDICINE_RESOURCE_ID
+        "medicina": MEDICINE_RESOURCE_ID,
+        "sólidos": SOLID_RESOURCE_ID,
     }
 
     # Replace Spanish months with English months
@@ -72,6 +104,32 @@ def scroll_right_to_left():
     start_x = size['width'] - 1
     start_y = size['height'] / 2 
     driver.swipe(start_x, start_y, 1, start_y, 800)  # Duration in milliseconds
+
+def scroll_to_top():
+    last_source = ""
+    while True:
+        # 1. Obtener el tamaño de la pantalla
+        size = driver.get_window_size()
+        width = size['width']
+        height = size['height']
+
+        # 2. Definir puntos: De arriba (20%) hacia abajo (80%) para subir el contenido
+        start_x = width / 2
+        start_y = height * 0.2  # Punto superior
+        end_y = height * 0.8    # Punto inferior
+
+        # 3. Realizar el swipe
+        driver.swipe(start_x, start_y, start_x, end_y, 800)
+        
+        # Pequeña pausa para que la UI se estabilice
+        time.sleep(1)
+
+        # 4. Verificar si la pantalla cambió
+        current_source = driver.page_source
+        if current_source == last_source:
+            print("Llegaste al principio de la página.")
+            break
+        last_source = current_source
 
 def parse_time_string(time_str):
     """
@@ -131,6 +189,7 @@ options = AppiumOptions()
 options.load_capabilities({
 	"platformName": "Android",
     "appPackage": "com.napper",
+    "appium:skipDeviceInitialization": True,
 	"appium:deviceName": "5a0dda8e1022",
 	"appium:automationName": "uiautomator2",
 	"appium:ensureWebviewsHavePages": True,
@@ -147,6 +206,8 @@ BASE_RESOURCE_ID = "NewBabyLogEntry"
 NAP_RESOURCE_ID = "NAP"
 NURSING_RESOURCE_ID = "NURSING"
 BOTTLE_RESOURCE_ID = "BOTTLE"
+MILK_RESOURCE_ID = "MILK"
+SOLID_RESOURCE_ID = "SOLID"
 WOKE_UP_RESOURCE_ID = "WOKE_UP"
 NIGHT_WAKING_RESOURCE_ID = "NIGHT_WAKING"
 DIAPER_RESOURCE_ID = "CHANGED_DIAPER"
@@ -157,7 +218,7 @@ NIGHT_SLEEP = "NIGHT_SLEEP"
 
 EVENTS = [NAP_RESOURCE_ID, NURSING_RESOURCE_ID, BOTTLE_RESOURCE_ID, WOKE_UP_RESOURCE_ID, NIGHT_WAKING_RESOURCE_ID, DIAPER_RESOURCE_ID, BED_TIME_RESOURCE_ID]
 
-driver = webdriver.Remote("http://192.168.68.67:4723", options=options)
+driver = webdriver.Remote("http://192.168.68.55:4723", options=options)
 
 while True:
     current_day = driver.find_element(By.XPATH, "//android.view.ViewGroup[@resource-id='TimeMachineHeader-MiddleDateButton']")
@@ -193,21 +254,21 @@ while True:
         notes = ''
 
         if(MEDICINE_RESOURCE_ID in event_type):
-            type = "Medicine"
+            custom_type = "Medicine"
 
-        if(NAP_RESOURCE_ID in event_type):
-            type = "Sleep"
+        elif(NAP_RESOURCE_ID in event_type):
+            custom_type = "Sleep"
             notes = "Nap"
 
-        if(NIGHT_SLEEP in event_type):
-            type = "Sleep"
+        elif(NIGHT_SLEEP in event_type):
+            custom_type = "Sleep"
             notes = "Night Sleep"
             duration_or_amount = register.split('Fin de la sesión de sueño de')[1].replace(" ", "")
             stop = events_csv[-1]["start"]
             start = subtract_time(current_day + " " + stop, duration_or_amount)
 
-        if(NURSING_RESOURCE_ID in event_type):
-            type = "Feed"
+        elif(NURSING_RESOURCE_ID in event_type):
+            custom_type = "Feed"
             start_location = "Breast"
             if (len(groups) > 3):
                 start_condition = "R" if "D" in groups[3] else ""
@@ -215,27 +276,39 @@ while True:
             else:
                 start_condition, end_condition = "", ""
 
-        if(BOTTLE_RESOURCE_ID in event_type):
-            type = "Feed"        
+        elif(BOTTLE_RESOURCE_ID in event_type):
+            custom_type = "Feed"        
             start_condition = "Formula"
             start_location = "Bottle"
 
-        if(WOKE_UP_RESOURCE_ID in event_type):
-            type = "Woke up"
+        elif(MILK_RESOURCE_ID in event_type):
+            custom_type = "Feed"        
+            start_condition = "Milk"
+            start_location = "Bottle"
         
-        if(DIAPER_RESOURCE_ID in event_type):
-            type = "Diaper"
+        elif(SOLID_RESOURCE_ID in event_type):
+            custom_type = "Feed"
+            start_condition = "Solid"
+
+        elif(WOKE_UP_RESOURCE_ID in event_type):
+            custom_type = "Woke up"
+        
+        elif(DIAPER_RESOURCE_ID in event_type):
+            custom_type = "Diaper"
             end_condition = map_values(duration_or_amount)
 
-        if(BED_TIME_RESOURCE_ID in event_type):
-            type = "Bed time"
+        elif(BED_TIME_RESOURCE_ID in event_type):
+            custom_type = "Bed time"
 
-        if(NIGHT_WAKING_RESOURCE_ID in event_type):
-            type = "Night waking"
+        elif(NIGHT_WAKING_RESOURCE_ID in event_type):
+            custom_type = "Night waking"
+
+        else:
+            custom_type = "Unknown"
 
         events_csv.append(
             {
-                "type": type,
+                "type": custom_type,
                 "day": current_day,
                 "start": start,
                 "stop": stop,
@@ -266,3 +339,4 @@ while True:
 
     scroll_right_to_left()
     time.sleep(3)
+    
