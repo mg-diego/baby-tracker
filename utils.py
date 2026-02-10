@@ -11,12 +11,14 @@ class Utils:
         diff = relativedelta(end_date, start_date)
         
         parts = []
+        if diff.years:
+            parts.append(f"{diff.years} year{'s' if diff.years > 1 else ''}")
         if diff.months:
             parts.append(f"{diff.months} month{'s' if diff.months > 1 else ''}")
         if diff.days:
             parts.append(f"{diff.days} day{'s' if diff.days > 1 else ''}")
             
-        return " and ".join(parts) if parts else "0 days"
+        return ", ".join(parts) if parts else "0 days"
 
     @staticmethod
     # Añadimos el parámetro default_index (0 por defecto)
