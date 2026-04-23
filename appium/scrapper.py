@@ -218,7 +218,7 @@ NIGHT_SLEEP = "NIGHT_SLEEP"
 
 EVENTS = [NAP_RESOURCE_ID, NURSING_RESOURCE_ID, BOTTLE_RESOURCE_ID, WOKE_UP_RESOURCE_ID, NIGHT_WAKING_RESOURCE_ID, DIAPER_RESOURCE_ID, BED_TIME_RESOURCE_ID]
 
-driver = webdriver.Remote("http://192.168.68.55:4723", options=options)
+driver = webdriver.Remote("http://192.168.68.50:4723", options=options)
 
 while True:
     current_day = driver.find_element(By.XPATH, "//android.view.ViewGroup[@resource-id='TimeMachineHeader-MiddleDateButton']")
